@@ -84,93 +84,70 @@ Open http://127.0.0.1:8080 in your browser to see:
 
 ### System Overview & Data Flow
 
-```
-┌─────────────────────────────────────────────────────────────────────────┐
-│                    Kraken WebSocket v2 API                              │
-│              wss://ws.kraken.com/v2 (Public Feed)                      │
-└───────────────────────────────┬─────────────────────────────────────────┘
-                                │
-                    ┌───────────┴───────────┐
-                    │  WebSocket Connection │
-                    │  (tokio-tungstenite)  │
-                    └───────────┬───────────┘
-                                │
-        ┌───────────────────────┼───────────────────────┐
-        │                       │                       │
-        ▼                       ▼                       ▼
-┌───────────────┐      ┌───────────────┐      ┌───────────────┐
-│  instrument   │      │     book      │      │    status     │
-│   channel     │      │    channel    │      │    channel    │
-│               │      │               │      │               │
-│ • Snapshot    │      │ • Snapshot    │      │ • System      │
-│ • Pairs info  │      │ • Updates     │      │   status      │
-│ • Precisions  │      │ • Checksums   │      │ • Engine      │
-│ • Increments  │      │ • Bids/Asks   │      │   health      │
-└───────┬───────┘      └───────┬───────┘      └───────┬───────┘
-        │                      │                      │
-        └──────────────────────┼──────────────────────┘
-                               │
-                    ┌──────────▼──────────┐
-                    │   WS Client         │
-                    │  (blackbox-ws)      │
-                    │                     │
-                    │ • Reconnection      │
-                    │ • Exponential       │
-                    │   backoff           │
-                    │ • Ping/Pong         │
-                    │ • Rate limit        │
-                    │   detection         │
-                    └──────────┬──────────┘
-                               │
-                    ┌──────────▼──────────┐
-                    │   Parser           │
-                    │  (normalize)       │
-                    │                     │
-                    │ • Frame parsing     │
-                    │ • Type conversion   │
-                    │ • Error handling    │
-                    └──────────┬──────────┘
-                               │
-        ┌──────────────────────┼──────────────────────┐
-        │                      │                      │
-        ▼                      ▼                      ▼
-┌───────────────┐    ┌───────────────┐    ┌───────────────┐
-│  Instrument   │    │   Orderbook   │    │    Health     │
-│   Manager     │    │    Engine     │    │   Tracker     │
-│               │    │               │    │               │
-│ • Store       │    │ • BTreeMap    │    │ • Per-symbol  │
-│   precisions  │    │   (bids/asks) │    │   metrics     │
-│ • Validate    │    │ • Apply       │    │ • Checksum    │
-│   symbols     │    │   updates     │    │   stats       │
-│               │    │ • Truncate    │    │ • Connection  │
-│               │    │   depth       │    │   status      │
-│               │    │ • Remove      │    │ • Message     │
-│               │    │   zero qty    │    │   rates       │
-│               │    │ • CRC32       │    │               │
-│               │    │   checksum    │    │               │
-│               │    │   verify      │    │               │
-└───────┬───────┘    └───────┬───────┘    └───────┬───────┘
-        │                    │                    │
-        └────────────────────┼────────────────────┘
-                             │
-                    ┌────────▼────────┐
-                    │    Recorder     │
-                    │                 │
-                    │ • Raw frames    │
-                    │ • Decoded       │
-                    │   events        │
-                    │ • Timestamps    │
-                    └────────┬────────┘
-                             │
-                    ┌────────▼────────┐
-                    │   HTTP API      │
-                    │   (axum)        │
-                    │                 │
-                    │ • /health       │
-                    │ • /book/:symbol │
-                    │ • /metrics      │
-                    │ • /export-bug   │
-                    └─────────────────┘
+```mermaid
+graph TB
+    subgraph Kraken["🌐 Kraken WebSocket v2 API"]
+        WS["wss://ws.kraken.com/v2<br/>(Public Feed)"]
+    end
+    
+    subgraph Channels["📡 Kraken Channels"]
+        INST["📊 instrument<br/>• Snapshot<br/>• Pairs info<br/>• Precisions<br/>• Increments"]
+        BOOK["📖 book<br/>• Snapshot<br/>• Updates<br/>• Checksums<br/>• Bids/Asks"]
+        STAT["🟢 status<br/>• System status<br/>• Engine health"]
+        HB["💓 heartbeat<br/>• Liveness"]
+        PING["📡 ping/pong<br/>• Keepalive"]
+    end
+    
+    subgraph Client["🔌 WebSocket Client (blackbox-ws)"]
+        CONN["WebSocket Connection<br/>(tokio-tungstenite)"]
+        WS_CLIENT["WS Client Logic<br/>• Reconnection<br/>• Exponential backoff<br/>• Ping/Pong<br/>• Rate limit detection"]
+        PARSER["Parser (normalize)<br/>• Frame parsing<br/>• Type conversion<br/>• Error handling"]
+    end
+    
+    subgraph Core["⚙️ Core Components (blackbox-core)"]
+        INST_MGR["Instrument Manager<br/>• Store precisions<br/>• Validate symbols"]
+        OB_ENGINE["Orderbook Engine<br/>• BTreeMap bids/asks<br/>• Apply updates<br/>• Truncate depth<br/>• Remove zero qty<br/>• CRC32 checksum verify"]
+        HEALTH["Health Tracker<br/>• Per-symbol metrics<br/>• Checksum stats<br/>• Connection status<br/>• Message rates"]
+        RECORDER["Recorder<br/>• Raw frames<br/>• Decoded events<br/>• Timestamps"]
+    end
+    
+    subgraph API["🌐 HTTP API (blackbox-server)"]
+        HTTP["Axum HTTP Server<br/>• /health<br/>• /book/:symbol<br/>• /metrics<br/>• /export-bug"]
+    end
+    
+    WS -->|"WebSocket Connection"| CONN
+    CONN -->|"Subscribe"| INST
+    CONN -->|"Subscribe"| BOOK
+    CONN -->|"Auto-received"| STAT
+    CONN -->|"Auto-received"| HB
+    CONN -->|"Send/Receive"| PING
+    
+    INST -->|"Reference Data"| WS_CLIENT
+    BOOK -->|"Orderbook Data"| WS_CLIENT
+    STAT -->|"Status Updates"| WS_CLIENT
+    HB -->|"Heartbeats"| WS_CLIENT
+    PING -->|"Keepalive"| WS_CLIENT
+    
+    WS_CLIENT -->|"Normalized Events"| PARSER
+    PARSER -->|"Instrument Data"| INST_MGR
+    PARSER -->|"Book Updates"| OB_ENGINE
+    PARSER -->|"Status/Health"| HEALTH
+    
+    OB_ENGINE -->|"Checksum Results"| HEALTH
+    INST_MGR -->|"Precision Info"| OB_ENGINE
+    
+    OB_ENGINE -->|"Orderbook State"| RECORDER
+    PARSER -->|"Raw Frames"| RECORDER
+    
+    OB_ENGINE -->|"Orderbook Data"| HTTP
+    HEALTH -->|"Health Metrics"| HTTP
+    RECORDER -->|"Recordings"| HTTP
+    
+    style Kraken fill:#e1f5ff
+    style Channels fill:#fff4e1
+    style Client fill:#e8f5e9
+    style Core fill:#f3e5f5
+    style API fill:#fce4ec
 ```
 
 ### Kraken WebSocket v2 Features Used
