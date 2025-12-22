@@ -5,7 +5,7 @@
 **A production-quality, high-performance Kraken WebSocket v2 market data client**
 
 [![Rust](https://img.shields.io/badge/Rust-1.70+-orange.svg)](https://www.rust-lang.org/)
-[![License](https://img.shields.io/badge/License-MIT%2FApache--2.0-blue.svg)](LICENSE)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![GitHub](https://img.shields.io/badge/GitHub-Adityaakr%2Fk--blackbox-green.svg)](https://github.com/Adityaakr/k-blackbox)
 
 </div>
