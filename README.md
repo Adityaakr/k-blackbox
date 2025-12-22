@@ -2,23 +2,46 @@
 
 **A Rust SDK for Kraken WebSocket v2 that verifies L2 orderbook integrity via CRC32 checksums and enables deterministic bug reproduction through frame-level recording and replay.**
 
+**Track:** SDK Client
+
 [![Rust](https://img.shields.io/badge/Rust-1.70+-orange.svg)](https://www.rust-lang.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![GitHub](https://img.shields.io/badge/GitHub-Adityaakr%2Fk--blackbox-green.svg)](https://github.com/Adityaakr/k-blackbox)
 
 ---
 
-## A) Clear Problem Statement
+## Quickstart
+
+```bash
+cargo build --release
+./target/release/blackbox run --symbols BTC/USD --depth 10 --http 127.0.0.1:8080
+curl http://127.0.0.1:8080/health
+curl http://127.0.0.1:8080/book/BTC%2FUSD/top
+```
+
+---
+
+## Problem
 
 Building reliable trading systems on Kraken WebSocket v2 requires manual WebSocket handling, orderbook state management, and checksum verification. When orderbook bugs occur in production—checksum mismatches, missed updates, or precision errors—there's no way to reproduce them deterministically. Teams spend hours debugging with incomplete logs and no visibility into the exact sequence of WebSocket frames that caused the issue.
 
 ---
 
-## B) What You Built
+## Solution
 
 Kraken Blackbox is a production-minded Rust SDK (`blackbox-core` + `blackbox-ws`) that abstracts Kraken WebSocket v2 complexity and provides verified L2 orderbooks with automatic checksum validation. The SDK maintains in-memory orderbooks, verifies CRC32 checksums per Kraken's v2 specification, and records raw WebSocket frames for deterministic replay. A companion CLI tool (`blackbox-server`) demonstrates SDK usage with a local HTTP API for health monitoring and bug bundle export.
 
 **What makes it unique**: Precision-preserving decimal handling (no floating-point errors), automatic checksum verification with auto-resync on mismatch, and deterministic record/replay that re-feeds frames through the same pipeline for exact bug reproduction.
+
+---
+
+## Key Features
+
+- **Checksum-verified orderbooks**: Validates CRC32 on every update per Kraken WS v2 spec, auto-resyncs on mismatch
+- **Deterministic record/replay**: Records raw WS frames + timestamps, replays through same pipeline at any speed
+- **Precision-preserving decimals**: Uses `rust_decimal::Decimal` throughout (no f64) to preserve exact precision
+- **Production-minded reliability**: Auto-reconnection with exponential backoff, optional keepalive hooks (ping/heartbeat)
+- **Health monitoring**: Per-symbol checksum stats, message rates, connection status, last seen times
+- **Bug bundle export**: One-click ZIP export (config, health, frames, orderbook state) for incident sharing
 
 ---
 
@@ -82,24 +105,13 @@ graph TB
 
 ---
 
-## C) Key Features
+## Technical Highlights
 
-- **Checksum-verified orderbooks**: Validates CRC32 on every update per Kraken WS v2 spec, auto-resyncs on mismatch
-- **Deterministic record/replay**: Records raw WS frames + timestamps, replays through same pipeline at any speed
-- **Precision-preserving decimals**: Uses `rust_decimal::Decimal` throughout (no f64) to preserve exact precision
-- **Production-minded reliability**: Auto-reconnection with exponential backoff, rate limit detection, ping/pong keepalive
-- **Health monitoring**: Per-symbol checksum stats, message rates, connection status, last seen times
-- **Bug bundle export**: One-click ZIP export (config, health, frames, orderbook state) for incident sharing
+Built in Rust with `tokio` for async I/O and `tokio-tungstenite` for WebSocket communication. Orderbooks use `BTreeMap<Decimal, Decimal>` for efficient ordered iteration and O(log n) truncation. Checksum verification implements Kraken's exact CRC32 algorithm: formats price/qty as fixed decimals using `price_precision`/`qty_precision` from instrument channel, concatenates asks then bids, computes CRC32. All arithmetic uses `rust_decimal::Decimal` to avoid floating-point precision errors. WebSocket client handles reconnection with exponential backoff + jitter. Recorder writes NDJSON with raw frames + timestamps; replayer re-feeds frames through the same parsing/orderbook/checksum pipeline for deterministic reproduction.
 
 ---
 
-## D) Technical Highlights
-
-Built in Rust with `tokio` for async I/O and `tokio-tungstenite` for WebSocket communication. Orderbooks use `BTreeMap<Decimal, Decimal>` for efficient ordered iteration and O(log n) truncation. Checksum verification implements Kraken's exact CRC32 algorithm: formats price/qty as fixed decimals using `price_precision`/`qty_precision` from instrument channel, concatenates asks then bids, computes CRC32. All arithmetic uses `rust_decimal::Decimal` to avoid floating-point precision errors. WebSocket client handles reconnection with exponential backoff + jitter, detects "Exceeded msg rate" errors and enters cooldown mode, sends application-level ping messages every 30s to prevent idle disconnects. Recorder writes NDJSON with raw frames + timestamps; replayer re-feeds frames through the same parsing/orderbook/checksum pipeline for deterministic reproduction.
-
----
-
-## E) How It Works
+## How It Works
 
 ### Install & Build
 
@@ -109,20 +121,7 @@ cd k-blackbox
 cargo build --release
 ```
 
-### Quickstart
-
-```bash
-# Start the server
-./target/release/blackbox run --symbols BTC/USD --depth 10
-
-# Check health
-curl http://127.0.0.1:8080/health
-
-# Get top of book
-curl http://127.0.0.1:8080/book/BTC%2FUSD/top
-```
-
-### SDK Usage
+### SDK Usage (Example)
 
 ```rust
 use blackbox_ws::{WsClient, WsEvent};
@@ -135,7 +134,7 @@ async fn main() -> anyhow::Result<()> {
     let (tx, mut rx) = mpsc::unbounded_channel();
     let client = WsClient::new(
         vec!["BTC/USD".to_string()],
-        10, // depth
+        10,
         Duration::from_secs(30),
         tx,
     );
@@ -204,7 +203,7 @@ async fn main() -> anyhow::Result<()> {
 
 ---
 
-## F) Demo & Documentation
+## Demo & Documentation
 
 **GitHub Repository**: [https://github.com/Adityaakr/k-blackbox](https://github.com/Adityaakr/k-blackbox)
 
@@ -248,9 +247,9 @@ curl http://127.0.0.1:8080/book/BTC%2FUSD/top
 ```bash
 curl -X POST http://127.0.0.1:8080/export-bug \
   -H "Content-Type: application/json" \
-  -d '{"symbol": "BTC/USD"}' \
   -o bug-bundle.zip
 ```
+Returns ZIP file with config, health, frames, and instruments.
 
 **Documentation**: See `/docs` directory:
 - `API.md` - HTTP API reference
@@ -259,7 +258,7 @@ curl -X POST http://127.0.0.1:8080/export-bug \
 
 ---
 
-## G) Future Enhancements
+## Future Enhancements
 
 - Multi-connection sharding router for high-throughput symbol subscriptions
 - Strategy hooks: callback API for custom orderbook event handlers
@@ -295,7 +294,7 @@ curl -X POST http://127.0.0.1:8080/export-bug \
 - `GET /book/:symbol/top` - Top of book (best bid/ask, spread, mid price)
 - `GET /book/:symbol?limit=N` - Full orderbook (or limited depth)
 - `GET /metrics` - Prometheus-formatted metrics
-- `POST /export-bug` - Export bug bundle ZIP (config, health, frames, instruments)
+- `POST /export-bug` - Export bug bundle ZIP (returns ZIP file with config, health, frames, instruments)
 
 See `/docs/API.md` for detailed request/response examples.
 
