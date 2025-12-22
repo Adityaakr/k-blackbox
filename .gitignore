@@ -1,0 +1,46 @@
+# Rust/Cargo
+/target/
+**/*.rs.bk
+*.pdb
+Cargo.lock
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Build artifacts
+*.o
+*.so
+*.dylib
+*.dll
+*.exe
+
+# Documentation files (except README.md)
+*.md
+!README.md
+
+# Shell scripts
+*.sh
+
+# Logs
+*.log
+/tmp/
+/tmp/blackbox*.log
+/tmp/blackbox*.pid
+
+# Recordings (optional - uncomment if you don't want to commit recordings)
+# recordings/
+# *.ndjson
+
+# Bug bundles
+*.zip
+bug-bundle/
+
+# Environment files
+.env
+.env.local
+
