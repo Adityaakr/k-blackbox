@@ -2,84 +2,6 @@
 
 A production-quality, high-performance Kraken WebSocket v2 market data client with orderbook engine, checksum verification, recording/replay capabilities, and a local HTTP API.
 
-## What is Kraken Blackbox?
-
-Kraken Blackbox is a comprehensive infrastructure tool for ingesting, validating, and debugging Kraken's WebSocket v2 market data feed. It provides:
-
-- **Real-time orderbook management** with automatic depth truncation
-- **CRC32 checksum verification** exactly per Kraken's v2 specification
-- **Deterministic recording and replay** for debugging orderbook issues
-- **Health monitoring** with per-symbol metrics and checksum mismatch detection
-- **Bug bundle export** for capturing and sharing orderbook anomalies
-- **Precision-preserving decimal handling** (no floating-point errors)
-
-### Why It Matters
-
-When building trading systems, orderbook integrity is critical. Kraken Blackbox helps you:
-
-1. **Detect checksum mismatches** that indicate data corruption or bugs
-2. **Reproduce issues deterministically** by replaying recorded sessions
-3. **Debug orderbook state** with exportable bug bundles containing frames, config, and health data
-4. **Monitor system health** in real-time via HTTP API and web UI
-
-## Quickstart
-
-### Prerequisites
-
-- Rust 1.70+ (install via [rustup](https://rustup.rs/))
-- Network access to `wss://ws.kraken.com/v2`
-
-### Build
-
-```bash
-cargo build --release
-```
-
-### Quick Test (Recommended First Step)
-
-```bash
-# Run the automated test script
-./test.sh
-```
-
-This will:
-1. Start the server with BTC/USD
-2. Test all endpoints
-3. Verify data is flowing
-4. Check for errors
-
-See [TESTING.md](TESTING.md) for detailed testing instructions.
-
-### Run
-
-```bash
-# Connect to Kraken WS v2, subscribe to BTC/USD and ETH/USD with depth 100
-./target/release/blackbox run \
-  --symbols BTC/USD,ETH/USD \
-  --depth 100 \
-  --http 127.0.0.1:8080 \
-  --ping-interval 30s \
-  --record ./recordings/run1.ndjson
-```
-
-### Access the Web UI
-
-Open http://127.0.0.1:8080 in your browser to see:
-- Real-time health status for each symbol
-- Top-of-book prices (bid/ask/spread/mid)
-- Checksum success rate
-- Recent checksum mismatches
-
-### Replay a Recording
-
-```bash
-# Replay at 4x speed
-./target/release/blackbox replay \
-  --input ./recordings/run1.ndjson \
-  --speed 4.0 \
-  --http 127.0.0.1:8080
-```
-
 ## Architecture
 
 ### System Overview & Data Flow
@@ -291,6 +213,84 @@ Error received: {"error": "Exceeded msg rate"}
 - ❌ **Order placement/cancellation** (trading functionality)
 
 These are out of scope for the MVP but could be added later.
+
+## What is Kraken Blackbox?
+
+Kraken Blackbox is a comprehensive infrastructure tool for ingesting, validating, and debugging Kraken's WebSocket v2 market data feed. It provides:
+
+- **Real-time orderbook management** with automatic depth truncation
+- **CRC32 checksum verification** exactly per Kraken's v2 specification
+- **Deterministic recording and replay** for debugging orderbook issues
+- **Health monitoring** with per-symbol metrics and checksum mismatch detection
+- **Bug bundle export** for capturing and sharing orderbook anomalies
+- **Precision-preserving decimal handling** (no floating-point errors)
+
+### Why It Matters
+
+When building trading systems, orderbook integrity is critical. Kraken Blackbox helps you:
+
+1. **Detect checksum mismatches** that indicate data corruption or bugs
+2. **Reproduce issues deterministically** by replaying recorded sessions
+3. **Debug orderbook state** with exportable bug bundles containing frames, config, and health data
+4. **Monitor system health** in real-time via HTTP API and web UI
+
+## Quickstart
+
+### Prerequisites
+
+- Rust 1.70+ (install via [rustup](https://rustup.rs/))
+- Network access to `wss://ws.kraken.com/v2`
+
+### Build
+
+```bash
+cargo build --release
+```
+
+### Quick Test (Recommended First Step)
+
+```bash
+# Run the automated test script
+./test.sh
+```
+
+This will:
+1. Start the server with BTC/USD
+2. Test all endpoints
+3. Verify data is flowing
+4. Check for errors
+
+See [TESTING.md](TESTING.md) for detailed testing instructions.
+
+### Run
+
+```bash
+# Connect to Kraken WS v2, subscribe to BTC/USD and ETH/USD with depth 100
+./target/release/blackbox run \
+  --symbols BTC/USD,ETH/USD \
+  --depth 100 \
+  --http 127.0.0.1:8080 \
+  --ping-interval 30s \
+  --record ./recordings/run1.ndjson
+```
+
+### Access the Web UI
+
+Open http://127.0.0.1:8080 in your browser to see:
+- Real-time health status for each symbol
+- Top-of-book prices (bid/ask/spread/mid)
+- Checksum success rate
+- Recent checksum mismatches
+
+### Replay a Recording
+
+```bash
+# Replay at 4x speed
+./target/release/blackbox replay \
+  --input ./recordings/run1.ndjson \
+  --speed 4.0 \
+  --http 127.0.0.1:8080
+```
 
 ### Workspace Structure
 
