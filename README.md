@@ -2,6 +2,10 @@
 
 **A Rust SDK for Kraken WebSocket v2 that verifies L2 orderbook integrity via CRC32 checksums and enables deterministic bug reproduction through frame-level recording and replay.**
 
+[![Rust](https://img.shields.io/badge/Rust-1.70+-orange.svg)](https://www.rust-lang.org/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![GitHub](https://img.shields.io/badge/GitHub-Adityaakr%2Fk--blackbox-green.svg)](https://github.com/Adityaakr/k-blackbox)
+
 ---
 
 ## A) Clear Problem Statement
@@ -15,6 +19,66 @@ Building reliable trading systems on Kraken WebSocket v2 requires manual WebSock
 Kraken Blackbox is a production-minded Rust SDK (`blackbox-core` + `blackbox-ws`) that abstracts Kraken WebSocket v2 complexity and provides verified L2 orderbooks with automatic checksum validation. The SDK maintains in-memory orderbooks, verifies CRC32 checksums per Kraken's v2 specification, and records raw WebSocket frames for deterministic replay. A companion CLI tool (`blackbox-server`) demonstrates SDK usage with a local HTTP API for health monitoring and bug bundle export.
 
 **What makes it unique**: Precision-preserving decimal handling (no floating-point errors), automatic checksum verification with auto-resync on mismatch, and deterministic record/replay that re-feeds frames through the same pipeline for exact bug reproduction.
+
+---
+
+## Architecture & Data Flow
+
+```mermaid
+graph TB
+    subgraph Kraken["🌐 Kraken WebSocket v2"]
+        WS["wss://ws.kraken.com/v2<br/>(Public Market Data)"]
+    end
+    
+    subgraph SDK["📦 SDK Layer (blackbox-ws + blackbox-core)"]
+        CLIENT["WebSocket Client<br/>(tokio-tungstenite)"]
+        PARSER["Frame Parser<br/>(JSON → Normalized Events)"]
+        INST_MGR["Instrument Manager<br/>(price_precision, qty_precision)"]
+        OB_ENGINE["Orderbook Engine<br/>(BTreeMap, apply updates)"]
+        CHECKSUM["Checksum Verifier<br/>(CRC32 per Kraken spec)"]
+        RECORDER["Recorder<br/>(Raw frames + timestamps)"]
+    end
+    
+    subgraph APP["🔧 Example App (blackbox-server)"]
+        HTTP["HTTP API<br/>(Axum server)"]
+        HEALTH["Health Tracker<br/>(Metrics, stats)"]
+        REPLAYER["Replayer<br/>(Deterministic replay)"]
+    end
+    
+    WS -->|"1. Connect"| CLIENT
+    CLIENT -->|"2. Subscribe instrument"| WS
+    WS -->|"3. Instrument snapshot"| CLIENT
+    CLIENT -->|"4. Parse"| PARSER
+    PARSER -->|"5. Store precisions"| INST_MGR
+    CLIENT -->|"6. Subscribe book"| WS
+    WS -->|"7. Book snapshot/updates"| CLIENT
+    CLIENT -->|"8. Parse"| PARSER
+    PARSER -->|"9. Book events"| OB_ENGINE
+    INST_MGR -->|"10. Precisions"| CHECKSUM
+    OB_ENGINE -->|"11. Orderbook state"| CHECKSUM
+    CHECKSUM -->|"12. Verify CRC32"| OB_ENGINE
+    CHECKSUM -->|"13. Mismatch? Resync"| CLIENT
+    CLIENT -->|"14. Raw frames"| RECORDER
+    PARSER -->|"15. Decoded events"| RECORDER
+    OB_ENGINE -->|"16. Orderbook state"| HTTP
+    HEALTH -->|"17. Metrics"| HTTP
+    RECORDER -->|"18. NDJSON file"| REPLAYER
+    REPLAYER -->|"19. Replay frames"| PARSER
+    
+    style Kraken fill:#e1f5ff
+    style SDK fill:#e8f5e9
+    style APP fill:#fff4e1
+```
+
+### Flow Overview
+
+1. **Connection**: SDK connects to Kraken WebSocket v2 public endpoint
+2. **Instrument Channel**: Subscribes to get symbol precisions (`price_precision`, `qty_precision`)
+3. **Book Channel**: Subscribes to L2 orderbook with specified depth
+4. **Processing**: Frames parsed → orderbook updated → checksum verified
+5. **Recording**: Raw frames + decoded events written to NDJSON
+6. **Serving**: HTTP API exposes orderbooks, health, and bug bundles
+7. **Replay**: Recorded frames re-fed through same pipeline deterministically
 
 ---
 
@@ -48,8 +112,13 @@ cargo build --release
 ### Quickstart
 
 ```bash
+# Start the server
 ./target/release/blackbox run --symbols BTC/USD --depth 10
+
+# Check health
 curl http://127.0.0.1:8080/health
+
+# Get top of book
 curl http://127.0.0.1:8080/book/BTC%2FUSD/top
 ```
 
@@ -66,7 +135,7 @@ async fn main() -> anyhow::Result<()> {
     let (tx, mut rx) = mpsc::unbounded_channel();
     let client = WsClient::new(
         vec!["BTC/USD".to_string()],
-        10,
+        10, // depth
         Duration::from_secs(30),
         tx,
     );
@@ -88,9 +157,14 @@ async fn main() -> anyhow::Result<()> {
                 
                 if let Some(expected) = checksum {
                     let inst = instruments.get(&symbol).unwrap();
-                    let computed = verify_checksum(&orderbooks[&symbol], inst)?;
-                    if computed != expected {
-                        eprintln!("Checksum mismatch: {} != {}", computed, expected);
+                    let is_valid = verify_checksum(
+                        &orderbooks[&symbol],
+                        expected,
+                        inst.price_precision,
+                        inst.qty_precision,
+                    );
+                    if !is_valid {
+                        eprintln!("Checksum mismatch for {}", symbol);
                     }
                 }
             }
@@ -100,9 +174,14 @@ async fn main() -> anyhow::Result<()> {
                 
                 if let Some(expected) = checksum {
                     let inst = instruments.get(&symbol).unwrap();
-                    let computed = verify_checksum(ob, inst)?;
-                    if computed != expected {
-                        eprintln!("Checksum mismatch: {} != {}", computed, expected);
+                    let is_valid = verify_checksum(
+                        ob,
+                        expected,
+                        inst.price_precision,
+                        inst.qty_precision,
+                    );
+                    if !is_valid {
+                        eprintln!("Checksum mismatch for {}", symbol);
                     }
                 }
             }
@@ -113,7 +192,7 @@ async fn main() -> anyhow::Result<()> {
 }
 ```
 
-### Workflow
+### Workflow Steps
 
 1. **Connect**: SDK connects to `wss://ws.kraken.com/v2` (Kraken WebSocket v2 public endpoint)
 2. **Instrument**: Subscribes to `instrument` channel (snapshot=true) to fetch `price_precision`/`qty_precision` for symbols
