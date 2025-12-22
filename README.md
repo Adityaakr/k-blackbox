@@ -2,8 +2,7 @@
 
 <div align="center">
 
-**A production-quality, high-performance Kraken WebSocket v2 market data client**
-
+Kraken Blackbox is a correctness verified Kraken WS v2 Rust SDK that records and replays market data so teams can trust their orderbooks and reproduce bugs deterministically
 [![Rust](https://img.shields.io/badge/Rust-1.70+-orange.svg)](https://www.rust-lang.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![GitHub](https://img.shields.io/badge/GitHub-Adityaakr%2Fk--blackbox-green.svg)](https://github.com/Adityaakr/k-blackbox)
@@ -645,7 +644,9 @@ cargo test --package blackbox-core checksum
 
 ## License
 
-MIT OR Apache-2.0
+This project is licensed under the **MIT License** - see the [LICENSE](LICENSE) file for details.
+
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 ---
 
