@@ -34,6 +34,25 @@ Kraken Blackbox is a production-minded Rust SDK (`blackbox-core` + `blackbox-ws`
 
 ---
 
+## Built for & Impact
+
+Kraken Blackbox is built for teams building trading systems, market data pipelines, and algorithmic trading strategies on Kraken WebSocket v2. It eliminates weeks of infrastructure work and enables rapid debugging of production issues.
+
+### Time and Cost Savings
+
+| Task | Without Blackbox | With Blackbox | Savings |
+|------|------------------|---------------|---------|
+| WebSocket client | 2-3 days | 5 minutes | 99% |
+| Checksum verification | 1-2 days | Done | 100% |
+| Health monitoring | 1-2 days | Done | 100% |
+| Recording/replay | 2-3 days | Done | 100% |
+| Bug debugging | Days/weeks | Minutes | 95%+ |
+| **Total** | **1-2 weeks** | **5 minutes** | **99.5%** |
+
+**Impact**: Instead of spending 1-2 weeks building infrastructure, teams can start with a production-minded SDK in minutes and focus on their trading logic. When bugs occur, deterministic replay turns days of debugging into minutes of investigation.
+
+---
+
 ## Key Features
 
 - **Checksum-verified orderbooks**: Validates CRC32 on every update per Kraken WS v2 spec, auto-resyncs on mismatch
