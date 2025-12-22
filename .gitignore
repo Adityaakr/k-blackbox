@@ -19,9 +19,10 @@ Cargo.lock
 *.dll
 *.exe
 
-# Documentation files (except README.md)
+# Documentation files (except README.md and PROJECT_DESCRIPTION.md)
 *.md
 !README.md
+!PROJECT_DESCRIPTION.md
 
 
 # Logs
