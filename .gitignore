@@ -23,8 +23,6 @@ Cargo.lock
 *.md
 !README.md
 
-# Shell scripts
-*.sh
 
 # Logs
 *.log
