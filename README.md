@@ -1,5 +1,4 @@
-# Kraken Blackbox: 
-## Verified Orderbooks. Reproducible Incidents
+# Kraken Blackbox: Verified Orderbooks. Reproducible Incidents
 
 **Live CRC32-verified L2 books + frame-level NDJSON record/replay + incident ZIP export — with real-time verify latency telemetry (last/avg/p95) in the TUI.**
 
@@ -182,7 +181,7 @@ Comprehensive documentation in `/docs`:
 
 **Step 1: Show Live Integrity Verification**
 ```bash
-./target/release/blackbox tui --symbols BTC/USD,ETH/USD,SOL/USD --depth 10
+./target/release/blackbox tui --symbols BTC/USD,ETH/USD,SOL/USD,AVAX/USD --depth 25
 ```
 Point to Integrity Inspector showing Expected vs Got checksums matching ✅
 
