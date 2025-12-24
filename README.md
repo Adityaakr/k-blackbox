@@ -1,60 +1,91 @@
-# Kraken Blackbox: Verified orderbooks. Reproducible incidents.
+# Kraken Blackbox
+## Verified orderbooks. Reproducible incidents.
 
-**Live CRC32-verified L2 books + frame-level NDJSON record/replay + incident ZIP export — with real-time verify latency telemetry (last/avg/p95) in the TUI.**
+**Rust SDK + TUI for Kraken WebSocket v2 that makes orderbook integrity *observable* (CRC32) and bugs *replayable* (NDJSON).**  
+**Includes incident ZIP export with full context + verify latency telemetry (last/avg/p95) inside the TUI.**
 
 [![Rust](https://img.shields.io/badge/Rust-1.70+-orange.svg)](https://www.rust-lang.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Track: SDK Client](https://img.shields.io/badge/Track-SDK%20Client-blue.svg)]()
 
-**Why this wins vs throughput SDKs:** High-performance SDKs fail silently. Blackbox makes data integrity observable—you see checksums match in real-time, and when they don't, you get a reproducible incident bundle with full diagnostic context.
-<img width="1021" height="637" alt="Screenshot 2025-12-24 at 9 38 40 PM" src="https://github.com/user-attachments/assets/c568972a-608a-409e-a02f-7a32dbfc5c2c" />
-
-<img width="1031" height="648" alt="Screenshot 2025-12-24 at 9 35 43 PM" src="https://github.com/user-attachments/assets/63673d26-7f5b-4bab-8dee-ed0316fd84fc" />
-
-<img width="322" height="160" alt="Screenshot 2025-12-24 at 8 25 52 PM" src="https://github.com/user-attachments/assets/38371790-c504-4af7-a0cb-3e498126ce26" />
-
-<img width="330" height="89" alt="Screenshot 2025-12-24 at 8 27 54 PM" src="https://github.com/user-attachments/assets/7502e3db-7d78-4dbd-9ba8-28541cb7ec79" />
+> **Positioning:** Throughput SDKs can be fast and still be wrong.  
+> **Blackbox proves correctness in real time, and turns production mismatches into deterministic replayable bundles.**
 
 ---
+
+### Demo video
+https://youtu.be/tK241-jVu-M
+
+### Screenshots
+<img width="1021" height="637" alt="TUI" src="https://github.com/user-attachments/assets/c568972a-608a-409e-a02f-7a32dbfc5c2c" />
+<img width="1031" height="648" alt="Integrity Inspector" src="https://github.com/user-attachments/assets/63673d26-7f5b-4bab-8dee-ed0316fd84fc" />
+<img width="322" height="160" alt="Health" src="https://github.com/user-attachments/assets/38371790-c504-4af7-a0cb-3e498126ce26" />
+<img width="330" height="89" alt="Export" src="https://github.com/user-attachments/assets/7502e3db-7d78-4dbd-9ba8-28541cb7ec79" />
+
+---
+
+## What Kraken gives vs what Blackbox adds
+
+Kraken WS v2 includes a **CRC32 checksum** on book updates (computed from top-of-book levels).  
+**Blackbox computes the same checksum locally using Kraken’s instrument precisions and verifies it live.**
+
+- Kraken provides: `checksum_expected`
+- Blackbox adds: `checksum_computed` + **MATCH/MISMATCH** + **telemetry + replay + incident bundle**
+
+---
+
+## 30-second quickstart
 
 ```bash
-# Build
 cargo build --release
 
-# Launch TUI with live data
+# Live TUI (Integrity Inspector)
 ./target/release/blackbox tui --symbols BTC/USD,ETH/USD --depth 10
 
-# Or test HTTP API (in another terminal)
+# HTTP API (optional)
+./target/release/blackbox run --symbols BTC/USD --depth 10 --http 127.0.0.1:8080
 curl http://127.0.0.1:8080/health | jq .
-```
+````
 
-**What you should see:**
-- ✅ Integrity Inspector showing **Expected vs Got checksums** side-by-side
-- ✅ **MATCH** status when checksums verify correctly
-- ✅ Real-time orderbook with depth bars
-- ✅ **Verify latency telemetry** (last/avg/p95) displayed in Integrity Inspector
-- ✅ Health metrics (checksum OK rate, message counts)
+### What you’ll see in the TUI
+
+* **Expected vs Computed CRC32** side-by-side
+* **✅ MATCH / ❌ MISMATCH** integrity status
+* Live orderbook + health counters
+* **Verify latency telemetry**: last / avg / p95 (typical p95 < 10ms)
 
 ---
 
-## 🎬 Judge Demo Script (2 Minutes)
+## The 2-minute judge demo (copy/paste)
 
-### Step 1: Show Live Integrity Verification
+### 1) Prove integrity live
+
 ```bash
 ./target/release/blackbox tui --symbols BTC/USD,ETH/USD,SOL/USD --depth 10
 ```
-**Point to:** Integrity Inspector showing Expected checksum (from Kraken) vs Got checksum (computed locally) matching ✅
 
-### Step 2: Record a Session
-Press **[R]** in TUI to start recording. Wait 10-20 seconds. Press **[R]** again to stop.
+Show the **Integrity Inspector**:
 
-**Or via CLI:**
+* Expected checksum (from Kraken)
+* Computed checksum (from Blackbox)
+* ✅ MATCH badge
+
+### 2) Record frames (NDJSON)
+
+Inside the TUI:
+
+* Press **[R]** to toggle recording (ON)
+* Wait ~10–20 seconds
+* Press **[R]** again (OFF)
+
+Or via CLI:
+
 ```bash
 ./target/release/blackbox tui --symbols BTC/USD --depth 10 --record session.ndjson
-# Wait, then press Q
 ```
 
-### Step 3: Trigger Controlled Mismatch (Fault Injection)
+### 3) Replay + trigger a controlled mismatch (fault injection)
+
 ```bash
 ./target/release/blackbox tui \
   --symbols BTC/USD --depth 10 \
@@ -64,365 +95,173 @@ Press **[R]** in TUI to start recording. Wait 10-20 seconds. Press **[R]** again
   --speed 4.0
 ```
 
-**Watch:** Status changes from ✅ MATCH to ❌ MISMATCH. Event log shows: `FAULT_INJECTED` → `CHECKSUM_MISMATCH` → `INCIDENT_CAPTURED`
+Watch the Integrity Inspector flip:
 
-### Step 4: Export Incident Bundle
-Press **[E]** in TUI, or:
+* ✅ MATCH → ❌ MISMATCH
+* Event log: `FAULT_INJECTED` → `CHECKSUM_MISMATCH` → `INCIDENT_CAPTURED`
+
+### 4) Export incident bundle (ZIP)
+
+In the TUI press **[E]**
+or
+
 ```bash
 curl -X POST http://127.0.0.1:8080/export-bug -o incident.zip
-```
-
-**Verify:**
-```bash
 unzip -l incident.zip
-# Shows: metadata.json, config.json, health.json, frames.ndjson, orderbook.json, checksums.json
 ```
 
-### Step 5: Replay to Reproduce
+### 5) Reproduce the incident deterministically
+
 ```bash
 ./target/release/blackbox replay-incident \
   --bundle ./incidents/incident_*.zip \
   --speed 4.0
 ```
 
-**Result:** Same mismatch occurs at the same frame—deterministic reproduction.
+Same mismatch occurs at the same frame → reproducible debugging.
 
 ---
 
-## 🎯 Why It Matters
+## Why this matters (the silent failure problem)
 
-Trading systems built on WebSocket orderbooks face a silent failure problem:
+Orderbooks can silently diverge due to missed updates, reconnect edges, precision mistakes, or parsing bugs.
+When that happens:
 
-- ❌ **High-throughput SDKs process millions of messages** but can't prove correctness
-- ❌ **Checksum mismatches occur** but you have no visibility into what went wrong
-- ❌ **Bugs are non-reproducible**—no way to replay the exact sequence of frames
-- ❌ **Debugging takes days** with incomplete logs and no diagnostic context
-- ❌ **Stakeholders can't verify** that your system is working correctly
+* Logs are incomplete
+* The exact frame sequence is gone
+* The bug is not reproducible
+* Debugging turns into guessing
 
-**Kraken's solution:** Each book update includes a CRC32 checksum computed from the top 10 bids/asks. We compute the same checksum locally and compare. If they match, the orderbook is correct. If not, we capture the incident.
+**Blackbox makes correctness visible and debugging deterministic.**
 
 ---
 
-## ⚡ Why It's Better: Before vs After
+## Key features
 
-### Key Improvements
+### Integrity (the differentiator)
 
-| Metric | Improvement |
-|--------|-------------|
-| **Incident discovery time** | Hours/days → **Real-time** (99%+ faster) |
-| **Debugging time** | 2-5 days → **2-5 minutes** (99%+ faster) |
-| **Bug reproduction** | Often impossible → **100% deterministic** |
-| **Time to share context** | 1-2 days → **30 seconds** (99%+ faster) |
-| **Verification cycle** | 1-3 days → **1 minute** (99%+ faster) |
-| **Overall incident resolution** | **5-15 days → <10 minutes** (99%+ faster) |
+* Live **CRC32 checksum verification** on every book update (Kraken WS v2 spec)
+* **Expected vs Computed** checksum display in TUI
+* Mismatch event timeline + per-symbol integrity stats
+* **Verify latency telemetry**: last / avg / p95
 
-## 🏗️ What We Built
+### Record / Replay
 
+* Frame-level recording to **NDJSON**
+* Deterministic replay at any speed: realtime / xN / as-fast
+* Fault injection for demo + robustness testing:
 
-A Rust SDK (`blackbox-core` + `blackbox-ws`) plus CLI tool (`blackbox-server`) that:
+  * `--fault mutate_qty --once-at N` (and other modes if implemented)
 
-1. **Connects** to Kraken WebSocket v2
-2. **Parses** instrument snapshots (to get price/qty precisions)
-3. **Maintains** in-memory orderbooks (BTreeMap for ordered iteration)
-4. **Verifies** CRC32 checksums on every update (using instrument precisions)
-5. **Records** raw frames + timestamps to NDJSON
-6. **Replays** frames deterministically through the same pipeline
-7. **Exports** incident bundles (ZIP with config, health, frames, orderbook state)
+### Incidents
+
+* One-click **incident ZIP export** with full context:
+
+  * checksums (expected/computed + preview string)
+  * orderbook snapshot
+  * health snapshot
+  * recent frames window (NDJSON)
+  * config + metadata
+
+### Production-minded SDK choices
+
+* `rust_decimal::Decimal` end-to-end (no float drift)
+* `BTreeMap` orderbook structure (ordered iteration for checksum)
+* Tokio async WS client + clean event pipeline
+* Optional HTTP API for health + export
+
+---
+
+## Architecture (mental model)
 
 ```
-┌─────────────────────────────────────────────────────────────────────────┐
-│                          Kraken WebSocket v2                            │
-│                    (wss://ws.kraken.com/v2)                             │
-└──────────────────────┬──────────────────────────────────────────────────┘
-                       │ Raw JSON frames
-                       v
-┌─────────────────────────────────────────────────────────────────────────┐
-│                         Frame Parser                                    │
-│  • Parse JSON messages                                                  │
-│  • Extract: InstrumentSnapshot, BookSnapshot, BookUpdate                │
-│  • Validate message structure                                           │
-└──────────────────────┬──────────────────────────────────────────────────┘
-                       │ Structured Events
-                       v
-┌─────────────────────────────────────────────────────────────────────────┐
-│                      Orderbook Engine                                   │
-│  • BTreeMap-based orderbook (ordered by price)                         │
-│  • Apply snapshots (replace state)                                     │
-│  • Apply updates (incremental changes)                                 │
-│  • Maintain depth limit (10/25/100/500/1000 levels)                    │
-│  • rust_decimal for precision (no float errors)                        │
-└──────────────────────┬──────────────────────────────────────────────────┘
-                       │ Orderbook State
-                       v
-┌─────────────────────────────────────────────────────────────────────────┐
-│                    Checksum Verifier                                    │
-│  • Build checksum string (top 10 bids + asks)                          │
-│  • Format: price_precision + qty_precision (from instrument)           │
-│  • Compute CRC32 locally                                               │
-│  • Compare with Kraken-provided checksum                               │
-│  • Record latency (verify time)                                        │
-└──────────────────────┬──────────────────────────────────────────────────┘
-                       │ Match Result
-                       ├─────────────────┐
-                       │                 │
-        ┌──────────────┴──────┐  ┌──────┴──────────────┐
-        │   ✅ MATCH          │  │   ❌ MISMATCH       │
-        │   • Update health   │  │   • Record incident │
-        │   • Increment OK    │  │   • Auto-resync     │
-        └─────────────────────┘  │   • Export bundle   │
-                                 └─────────────────────┘
-
-┌─────────────────────────────────────────────────────────────────────────┐
-│                      Frame Buffer (Ring Buffer)                         │
-│  • Last 2000 frames per symbol                                         │
-│  • Raw JSON strings (timestamped)                                      │
-│  • Used for incident bundles (t-30s to t+5s window)                    │
-└──────────────────────┬──────────────────────────────────────────────────┘
-                       │
-                       v
-┌─────────────────────────────────────────────────────────────────────────┐
-│                         Recorder                                        │
-│  • Write frames to NDJSON file                                         │
-│  • Format: {"ts":"...","raw_frame":"...","decoded_event":null}         │
-│  • Toggle on/off via [R] key or --record flag                          │
-│  • Deterministic replay via Replayer                                   │
-└─────────────────────────────────────────────────────────────────────────┘
-
-┌─────────────────────────────────────────────────────────────────────────┐
-│                    Incident Manager                                     │
-│  • Trigger on: checksum mismatch, rate limit, disconnect               │
-│  • Capture: metadata, config, health, frames, orderbook, checksums     │
-│  • Export: ZIP bundle (./incidents/incident_*.zip)                     │
-│  • Reproducible: replay bundle with same fault injection               │
-└─────────────────────────────────────────────────────────────────────────┘
-
-┌─────────────────────────────────────────────────────────────────────────┐
-│                    Fault Injector (Replay Mode)                         │
-│  • Drop frame: Skip a book update                                      │
-│  • Reorder: Swap two consecutive frames                                │
-│  • Mutate qty: Add/subtract smallest increment                         │
-│  • Configurable: --fault TYPE --once-at N                              │
-│  • Guaranteed mismatch for demos                                       │
-└─────────────────────────────────────────────────────────────────────────┘
-
-┌─────────────────────────────────────────────────────────────────────────┐
-│                      Shared State (AppState)                            │
-│  • DashMap<String, Orderbook>         (per-symbol orderbooks)          │
-│  • DashMap<String, SymbolHealth>      (OK/fail counts, rates)          │
-│  • DashMap<String, IntegrityProof>    (checksum details, latency)      │
-│  • VecDeque<UiEvent>                  (event log for TUI)              │
-│  • Arc<RwLock<Recorder>>              (recording state)                │
-│  • Arc<DashMap<String, VecDeque>>     (frame buffers)                  │
-└──────────────────────┬──────────────────────────────────────────────────┘
-                       │
-        ┌──────────────┼──────────────┐
-        │              │              │
-        v              v              v
-┌──────────────┐  ┌──────────────┐  ┌──────────────┐
-│   TUI (Ratatui) │  │  HTTP API (Axum)│  │   Metrics (Prometheus)│
-│                │  │                │  │                        │
-│ • Integrity Tab│  │ • /health      │  │ • checksum_ok_total   │
-│ • Orderbook    │  │ • /orderbook   │  │ • checksum_fail_total │
-│ • Inspector    │  │ • /export-bug  │  │ • message_latency_ms  │
-│ • Events       │  │ • /metrics     │  │                        │
-│ • [R] Record   │  │                │  │                        │
-│ • [E] Export   │  │                │  │                        │
-│ • [D] Fault    │  │                │  │                        │
-└──────────────┘  └──────────────┘  └──────────────┘
+Kraken WS frames
+   ↓
+Parser → typed events
+   ↓
+Orderbook (BTreeMap<Decimal, Decimal>)
+   ↓
+Checksum verifier (CRC32)
+   ├─ MATCH → update health + telemetry
+   └─ MISMATCH → capture incident + export bundle
+   ↓
+Recorder (NDJSON) ↔ Replayer (same pipeline)
+   ↓
+TUI / HTTP API read shared state
 ```
 
 ---
 
-## 📊 Key Differentiators
+## Commands
 
-| Feature | Throughput-Focused SDKs | **Kraken Blackbox** |
-|---------|------------------------|---------------------|
-| **Integrity Proof** | ❌ Not verified | ✅ **Visible in TUI (Expected vs Got)** |
-| **Bug Reproduction** | ❌ Non-deterministic | ✅ **Deterministic replay (same frames = same result)** |
-| **Incident Debugging** | ❌ Logs only | ✅ **One-click ZIP bundles with full context** |
-| **Precision Handling** | ⚠️ Floating-point errors | ✅ **`rust_decimal` (exact arithmetic)** |
-| **Visual Verification** | ❌ Trust blindly | ✅ **Integrity Inspector shows checksums live** |
-| **Replay Tooling** | ❌ Manual reconstruction | ✅ **Built-in replayer with fault injection** |
-| **Health Metrics** | ⚠️ Basic counters | ✅ **Checksum OK rate, mismatch tracking, incident count** |
+### Live
 
----
-
-## ✨ Features
-
-### Integrity Features
-- **CRC32 checksum verification** on every book update (per Kraken WS v2 spec)
-- **Auto-resync** on mismatch (re-subscribes to snapshot)
-- **Integrity Inspector TUI** showing Expected vs Computed checksums in real-time
-- **Top 10 bids/asks preview** used for checksum calculation
-**Verify latency tracking** — TUI shows last/avg/p95 checksum verify time (p95 < 10ms).
-
-### Replay & Incident Features
-- **Frame-level recording** (raw WebSocket frames + timestamps to NDJSON)
-- **Deterministic replay** at any speed (realtime, 4x, as-fast)
-- **Fault injection** (drop/reorder/mutate frames) for controlled demos
-- **Incident auto-capture** on checksum mismatch
-- **One-command bundle export** (ZIP with metadata, config, health, frames, orderbook)
-
-### Production Features
-- **Precision-preserving decimals** (`rust_decimal::Decimal`, no f64)
-- **Auto-reconnection** with exponential backoff
-- **Health monitoring** (per-symbol checksum stats, message rates, connection status)
-- **HTTP API** (health, orderbook queries, bundle export)
-- **Graceful shutdown** handling
-
----
-
-## 🏛️ Architecture
-
-Built in Rust with `tokio` for async I/O. Orderbooks use `BTreeMap<Decimal, Decimal>` for O(log n) insertion and ordered iteration. Checksum verification implements Kraken's exact algorithm:
-
-1. Format top 10 asks then bids as fixed decimals (using `price_precision`/`qty_precision` from instrument channel)
-2. Concatenate: `price:qty,price:qty,...`
-3. Compute CRC32 of the string
-4. Compare with Kraken's provided checksum
-
-All arithmetic uses `rust_decimal::Decimal` to avoid floating-point precision errors. Recorder writes NDJSON with raw frames + timestamps. Replayer re-feeds frames through the same parsing/orderbook/checksum pipeline for deterministic reproduction.
-
----
-
-## 📦 Install + Usage
-
-### Build
 ```bash
-git clone https://github.com/Adityaakr/k-blackbox.git
-cd k-blackbox
-cargo build --release
+./target/release/blackbox tui --symbols BTC/USD,ETH/USD --depth 10
 ```
 
-### Run Live Mode
-```bash
-# HTTP API mode
-./target/release/blackbox run --symbols BTC/USD,ETH/USD --depth 10 --http 127.0.0.1:8080
+### Record
 
-# TUI mode
-./target/release/blackbox tui --symbols BTC/USD,ETH/USD,SOL/USD --depth 10
-```
-
-### Record & Replay
 ```bash
-# Record
 ./target/release/blackbox tui --symbols BTC/USD --depth 10 --record session.ndjson
-
-# Replay with fault injection
-./target/release/blackbox tui \
-  --symbols BTC/USD --depth 10 \
-  --replay session.ndjson \
-  --fault mutate_qty \
-  --once-at 50 \
-  --speed 4.0
 ```
 
-### Mock Mode (Offline Testing)
+### Replay
+
 ```bash
-./target/release/blackbox tui --symbols BTC/USD,ETH/USD --depth 10 --mock
+./target/release/blackbox tui --symbols BTC/USD --depth 10 --replay session.ndjson --speed 4.0
 ```
 
-### SDK Usage Example
-```rust
-use blackbox_ws::{WsClient, WsEvent};
-use blackbox_core::{Orderbook, verify_checksum};
-use tokio::sync::mpsc;
+### Fault injection demo
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
-    let (tx, mut rx) = mpsc::unbounded_channel();
-    let client = WsClient::new(
-        vec!["BTC/USD".to_string()],
-        10,
-        Duration::from_secs(30),
-        tx,
-    );
-    tokio::spawn(async move { client.run().await.unwrap() });
+```bash
+./target/release/blackbox tui --symbols BTC/USD --depth 10 --replay session.ndjson --fault mutate_qty --once-at 50
+```
 
-    let mut orderbooks = HashMap::new();
-    let mut instruments = HashMap::new();
+### HTTP API
 
-    while let Some(event) = rx.recv().await {
-        match event {
-            WsEvent::BookUpdate { symbol, bids, asks, checksum, .. } => {
-                let ob = orderbooks.get_mut(&symbol).unwrap();
-                ob.apply_updates(bids, asks);
-                
-                if let Some(expected) = checksum {
-                    let inst = instruments.get(&symbol).unwrap();
-                    let is_valid = verify_checksum(
-                        ob, expected,
-                        inst.price_precision,
-                        inst.qty_precision,
-                    );
-                    if !is_valid {
-                        eprintln!("Checksum mismatch for {}", symbol);
-                    }
-                }
-            }
-            _ => {}
-        }
-    }
-    Ok(())
-}
+```bash
+./target/release/blackbox run --symbols BTC/USD --depth 10 --http 127.0.0.1:8080
+curl http://127.0.0.1:8080/health | jq .
 ```
 
 ---
 
-## 📁 Outputs & Artifacts
+## Incident bundle format
 
-### Incident Bundle (ZIP)
-When a checksum mismatch occurs (or on manual export), a bundle is created:
-
-```
+```text
 incidents/
-└── incident_1735065923_BTC_USD.zip
-    ├── metadata.json      # Incident ID, timestamp, reason, symbol
-    ├── config.json        # Symbols, depth, settings
-    ├── health.json        # Health snapshot at incident time
-    ├── frames.ndjson      # Last 500+ frames around incident
-    ├── orderbook.json     # Top N bids/asks snapshot
-    ├── instrument.json    # Precision info (if available)
-    └── checksums.json     # Expected/computed checksums, preview
-```
-
-**Example metadata.json:**
-```json
-{
-  "incident": {
-    "id": "incident_1735065923_ChecksumMismatch",
-    "timestamp": "2025-12-24T13:45:23.123Z",
-    "reason": "ChecksumMismatch",
-    "symbol": "BTC/USD"
-  },
-  "config": {
-    "symbols": ["BTC/USD"],
-    "depth": 10
-  }
-}
+└── incident_*.zip
+    ├── metadata.json
+    ├── config.json
+    ├── health.json
+    ├── frames.ndjson
+    ├── orderbook.json
+    └── checksums.json
 ```
 
 ---
 
-## 📚 Documentation
+## Project structure
 
-- [`docs/API.md`](docs/API.md) - HTTP API reference
-- [`docs/demo.md`](docs/demo.md) - Complete demo walkthrough
-- [`docs/TESTING.md`](docs/TESTING.md) - Testing guide
-- [`FAULT_INJECTION_TEST.md`](FAULT_INJECTION_TEST.md) - Fault injection testing
-
----
-
-## 🤝 Contribution
-
-Contributions welcome. Please open an issue first for significant changes.
+```text
+crates/
+  blackbox-core/     # orderbook + checksum + precision + recorder/replay
+  blackbox-ws/       # websocket client + parser + events
+  blackbox-server/   # CLI + TUI + HTTP API + incident export
+```
 
 ---
 
-## 📄 License
+## References
 
-MIT License - see [LICENSE](LICENSE) file for details.
+* Kraken WS v2 book docs: [https://docs.kraken.com/api/docs/websocket-v2/book](https://docs.kraken.com/api/docs/websocket-v2/book)
+* Kraken checksum guide (v2): [https://docs.kraken.com/api/docs/guides/spot-ws-book-v2/](https://docs.kraken.com/api/docs/guides/spot-ws-book-v2/)
 
 ---
 
-**Built for Kraken Forge SDK Client Track** | [GitHub](https://github.com/Adityaakr/k-blackbox)
+## License
+
+MIT
+--- ## 📄 License MIT License - see [LICENSE](LICENSE) file for details. ---
+
