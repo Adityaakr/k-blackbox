@@ -173,17 +173,6 @@ Comprehensive documentation in `/docs`:
 - **[Demo Script](./docs/demo.md)** - Complete judge demo walkthrough (2 minutes)
 - **[Demo Proof Runbook](./docs/DEMO_PROOF_RUNBOOK.md)** - Exact commands that work end-to-end
 
-**Features & Verification:**
-- **[Feature Verification](./docs/FEATURE_VERIFICATION.md)** - Truth-check of all claimed features
-- **[Testing Guide](./docs/TESTING.md)** - Comprehensive testing instructions
-- **[Latency Telemetry Testing](./docs/TEST_LATENCY_TELEMETRY.md)** - How to test latency stats (last/avg/p95)
-
-**Technical Details:**
-- **[API Reference](./docs/API.md)** - HTTP API endpoints
-- **[Latency Measurement](./docs/LATENCY_MEASUREMENT.md)** - How to measure p95 latency
-- **[Video Script](./docs/VIDEO_SCRIPT.md)** - 2-3 minute video script for demos
-- **[Video Storyboard](./docs/VIDEO_STORYBOARD.md)** - Quick reference for video production
-
 **Test Scripts:**
 - `./test.sh` - Quick test with multiple pairs (BTC/USD, ETH/USD, SOL/USD, AVAX/USD)
 - `scripts/smoke_*.sh` - Automated smoke tests for key features
