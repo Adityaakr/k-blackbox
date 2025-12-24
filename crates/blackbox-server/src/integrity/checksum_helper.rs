@@ -1,4 +1,5 @@
 use crate::integrity::proof::IntegrityProof;
+use crate::metrics;
 use blackbox_core::checksum::{build_checksum_string, compute_crc32};
 use blackbox_core::orderbook::Orderbook;
 use chrono::Utc;
@@ -11,6 +12,7 @@ pub fn update_integrity_proof(
     expected_checksum: u32,
     price_precision: u32,
     qty_precision: u32,
+    symbol: &str,
 ) -> bool {
     let start = Instant::now();
     
@@ -19,6 +21,9 @@ pub fn update_integrity_proof(
     let computed = compute_crc32(&checksum_string);
     
     let latency_ms = start.elapsed().as_millis() as u64;
+    
+    // Record latency metric
+    metrics::record_latency(symbol, latency_ms as f64);
     
     // Get top 10 bids and asks
     let top_asks: Vec<(Decimal, Decimal)> = book
@@ -40,7 +45,7 @@ pub fn update_integrity_proof(
     proof.checksum_len = checksum_string.len();
     proof.top_asks = top_asks;
     proof.top_bids = top_bids;
-    proof.verify_latency_ms = latency_ms;
+    proof.record_latency(latency_ms);
     proof.last_verify_ts = Utc::now();
     
     let is_match = expected_checksum == computed;

@@ -1128,6 +1128,7 @@ async fn process_ws_events_with_logging(
                             expected_checksum,
                             instrument.price_precision,
                             instrument.qty_precision,
+                            &symbol,
                         );
                         
                         let mut health = state.health.entry(symbol.clone()).or_insert_with(|| {
@@ -1234,6 +1235,7 @@ async fn process_ws_events_with_logging(
                                 expected_checksum,
                                 instrument.price_precision,
                                 instrument.qty_precision,
+                                &symbol,
                             );
                             
                             let mut health = state.health.entry(symbol.clone()).or_insert_with(|| {

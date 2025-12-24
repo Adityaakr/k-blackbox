@@ -1,6 +1,6 @@
 # Kraken Blackbox: Verified orderbooks. Reproducible incidents.
 
-**The correctness-first SDK that proves your orderbook integrity and makes bugs reproducible.**
+**Live CRC32-verified L2 books + frame-level NDJSON record/replay + incident ZIP export — with real-time verify latency telemetry (last/avg/p95) in the TUI.**
 
 [![Rust](https://img.shields.io/badge/Rust-1.70+-orange.svg)](https://www.rust-lang.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
@@ -31,6 +31,7 @@ curl http://127.0.0.1:8080/health | jq .
 - ✅ Integrity Inspector showing **Expected vs Got checksums** side-by-side
 - ✅ **MATCH** status when checksums verify correctly
 - ✅ Real-time orderbook with depth bars
+- ✅ **Verify latency telemetry** (last/avg/p95) displayed in Integrity Inspector
 - ✅ Health metrics (checksum OK rate, message counts)
 
 ---
@@ -103,32 +104,6 @@ Trading systems built on WebSocket orderbooks face a silent failure problem:
 
 ## ⚡ Why It's Better: Before vs After
 
-**Built for:** Production trading systems that need **verifiable correctness**, **deterministic debugging**, and **incident reproducibility**.
-
-### The Old Way (Without Blackbox)
-
-| Task | Time | Pain Points |
-|------|------|-------------|
-| **Discover checksum mismatch** | Hours to days | No visibility—only notice when downstream systems fail |
-| **Debug the issue** | 2-5 days | Scatter logs, no context, can't reproduce |
-| **Reproduce bug** | Often impossible | Non-deterministic, missing frames, no state capture |
-| **Share with support/team** | 1-2 days | Manual log collection, incomplete context |
-| **Verify fix works** | 1-3 days | Hope it doesn't happen again, no way to test |
-
-**Total time per incident: 5-15 days** ⏱️
-
-### The Blackbox Way
-
-| Task | Time | How Blackbox Helps |
-|------|------|-------------------|
-| **Discover checksum mismatch** | **Real-time** (TUI shows `❌ MISMATCH` immediately) | ✅ **Visible in Integrity Inspector** - Expected vs Got checksum, latency, top levels |
-| **Debug the issue** | **2-5 minutes** | ✅ **One-click export** - ZIP bundle with all context (frames, orderbook state, checksums, config) |
-| **Reproduce bug** | **Deterministic (seconds)** | ✅ **Replay incident bundle** - Same frames = same result, every time |
-| **Share with support/team** | **30 seconds** | ✅ **Self-contained ZIP** - Everything needed in one file, ready to send |
-| **Verify fix works** | **1 minute** | ✅ **Replay with fix** - Test deterministically before deploying |
-
-**Total time per incident: <10 minutes** ⚡
-
 ### Key Improvements
 
 | Metric | Improvement |
@@ -140,29 +115,8 @@ Trading systems built on WebSocket orderbooks face a silent failure problem:
 | **Verification cycle** | 1-3 days → **1 minute** (99%+ faster) |
 | **Overall incident resolution** | **5-15 days → <10 minutes** (99%+ faster) |
 
-### Real-World Impact
-
-**Scenario:** A checksum mismatch occurs in production during peak trading hours.
-
-**Before Blackbox:**
-- ❌ Mismatch discovered hours later when orderbook diverges
-- ❌ Team spends 2-3 days collecting logs from multiple services
-- ❌ Can't reproduce locally—bug is non-deterministic
-- ❌ Support ticket takes 1-2 weeks to resolve
-- ❌ No way to verify fix without waiting for next occurrence
-
-**With Blackbox:**
-- ✅ Mismatch visible immediately in TUI (`❌ MISMATCH` status)
-- ✅ Click `[E]` to export incident bundle (30 seconds)
-- ✅ Replay bundle locally: `blackbox replay-incident --bundle incident.zip` (reproduces instantly)
-- ✅ Share ZIP with support/team (all context included)
-- ✅ Test fix by replaying bundle again (verify in <1 minute)
-
-**Result:** From **weeks of uncertainty** to **minutes of clarity**.
-
----
-
 ## 🏗️ What We Built
+
 
 A Rust SDK (`blackbox-core` + `blackbox-ws`) plus CLI tool (`blackbox-server`) that:
 
@@ -299,7 +253,7 @@ A Rust SDK (`blackbox-core` + `blackbox-ws`) plus CLI tool (`blackbox-server`) t
 - **Auto-resync** on mismatch (re-subscribes to snapshot)
 - **Integrity Inspector TUI** showing Expected vs Computed checksums in real-time
 - **Top 10 bids/asks preview** used for checksum calculation
-- **Verify latency tracking** (<1ms typical)
+**Verify latency tracking** — TUI shows last/avg/p95 checksum verify time (p95 < 10ms).
 
 ### Replay & Incident Features
 - **Frame-level recording** (raw WebSocket frames + timestamps to NDJSON)

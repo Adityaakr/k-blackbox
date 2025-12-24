@@ -180,9 +180,34 @@ pub fn render_integrity_inspector(f: &mut Frame, area: Rect, proof: Option<&Inte
             Line::from(vec![
                 Span::raw(format!("Checksum Length: {} chars", p.checksum_len)),
             ]),
-            Line::from(vec![
-                Span::raw(format!("Verify Latency: {}ms", p.verify_latency_ms)),
-            ]),
+            Line::from(""),
+            {
+                let stats = p.latency_stats();
+                Line::from(vec![
+                    Span::styled("Verify Latency:", Style::default().fg(Color::Yellow)),
+                ])
+            },
+            {
+                let stats = p.latency_stats();
+                Line::from(vec![
+                    Span::raw("  Last: "),
+                    Span::styled(format!("{}ms", stats.last_ms), Style::default().fg(Color::Cyan)),
+                ])
+            },
+            {
+                let stats = p.latency_stats();
+                Line::from(vec![
+                    Span::raw("  Avg:  "),
+                    Span::styled(format!("{:.2}ms", stats.avg_ms), Style::default().fg(Color::Cyan)),
+                ])
+            },
+            {
+                let stats = p.latency_stats();
+                Line::from(vec![
+                    Span::raw("  P95:  "),
+                    Span::styled(format!("{}ms", stats.p95_ms), Style::default().fg(Color::Green)),
+                ])
+            },
             Line::from(""),
             Line::from("Top 10 Asks:"),
         ]

@@ -1,6 +1,7 @@
 use chrono::{DateTime, Utc};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
+use std::collections::VecDeque;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IntegrityProof {
@@ -10,10 +11,56 @@ pub struct IntegrityProof {
     pub checksum_len: usize,
     pub top_asks: Vec<(Decimal, Decimal)>, // (price, qty)
     pub top_bids: Vec<(Decimal, Decimal)>, // (price, qty)
-    pub verify_latency_ms: u64,
+    pub verify_latency_ms: u64, // Last latency
     pub last_verify_ts: DateTime<Utc>,
     pub last_mismatch_ts: Option<DateTime<Utc>>,
     pub diagnosis: Option<String>, // Reason for mismatch
+    #[serde(skip)]
+    latency_history: VecDeque<u64>, // Rolling window for statistics
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LatencyStats {
+    pub last_ms: u64,
+    pub avg_ms: f64,
+    pub p95_ms: u64,
+}
+
+impl IntegrityProof {
+    pub fn latency_stats(&self) -> LatencyStats {
+        if self.latency_history.is_empty() {
+            return LatencyStats {
+                last_ms: self.verify_latency_ms,
+                avg_ms: self.verify_latency_ms as f64,
+                p95_ms: self.verify_latency_ms,
+            };
+        }
+        
+        let mut sorted: Vec<u64> = self.latency_history.iter().copied().collect();
+        sorted.sort();
+        
+        let sum: u64 = sorted.iter().sum();
+        let avg = sum as f64 / sorted.len() as f64;
+        
+        // P95: 95th percentile
+        let p95_index = (sorted.len() as f64 * 0.95) as usize;
+        let p95 = sorted.get(p95_index.min(sorted.len() - 1)).copied().unwrap_or(0);
+        
+        LatencyStats {
+            last_ms: self.verify_latency_ms,
+            avg_ms: avg,
+            p95_ms: p95,
+        }
+    }
+    
+    pub fn record_latency(&mut self, latency_ms: u64) {
+        self.verify_latency_ms = latency_ms;
+        self.latency_history.push_back(latency_ms);
+        // Keep last 1000 samples for statistics
+        while self.latency_history.len() > 1000 {
+            self.latency_history.pop_front();
+        }
+    }
 }
 
 impl IntegrityProof {
@@ -29,6 +76,7 @@ impl IntegrityProof {
             last_verify_ts: Utc::now(),
             last_mismatch_ts: None,
             diagnosis: None,
+            latency_history: VecDeque::with_capacity(1000),
         }
     }
 
