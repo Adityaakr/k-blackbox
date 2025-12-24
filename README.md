@@ -110,16 +110,105 @@ A Rust SDK (`blackbox-core` + `blackbox-ws`) plus CLI tool (`blackbox-server`) t
 7. **Exports** incident bundles (ZIP with config, health, frames, orderbook state)
 
 ```
-┌─────────────┐     ┌──────────┐     ┌─────────────┐     ┌──────────┐
-│  Kraken WS  │ --> │  Parser  │ --> │  Orderbook  │ --> │ Checksum │
-│     v2      │     │ (Events) │     │  (BTreeMap) │     │ Verifier │
-└─────────────┘     └──────────┘     └─────────────┘     └──────────┘
-                                                              │
-                                                              v
-                    ┌──────────┐     ┌──────────┐     ┌─────────────┐
-                    │ Recorder │ <-- │  Frame   │ <-- │   Match?    │
-                    │ (NDJSON) │     │  Buffer  │     │   ❌ → ZIP  │
-                    └──────────┘     └──────────┘     └─────────────┘
+┌─────────────────────────────────────────────────────────────────────────┐
+│                          Kraken WebSocket v2                            │
+│                    (wss://ws.kraken.com/v2)                             │
+└──────────────────────┬──────────────────────────────────────────────────┘
+                       │ Raw JSON frames
+                       v
+┌─────────────────────────────────────────────────────────────────────────┐
+│                         Frame Parser                                    │
+│  • Parse JSON messages                                                  │
+│  • Extract: InstrumentSnapshot, BookSnapshot, BookUpdate                │
+│  • Validate message structure                                           │
+└──────────────────────┬──────────────────────────────────────────────────┘
+                       │ Structured Events
+                       v
+┌─────────────────────────────────────────────────────────────────────────┐
+│                      Orderbook Engine                                   │
+│  • BTreeMap-based orderbook (ordered by price)                         │
+│  • Apply snapshots (replace state)                                     │
+│  • Apply updates (incremental changes)                                 │
+│  • Maintain depth limit (10/25/100/500/1000 levels)                    │
+│  • rust_decimal for precision (no float errors)                        │
+└──────────────────────┬──────────────────────────────────────────────────┘
+                       │ Orderbook State
+                       v
+┌─────────────────────────────────────────────────────────────────────────┐
+│                    Checksum Verifier                                    │
+│  • Build checksum string (top 10 bids + asks)                          │
+│  • Format: price_precision + qty_precision (from instrument)           │
+│  • Compute CRC32 locally                                               │
+│  • Compare with Kraken-provided checksum                               │
+│  • Record latency (verify time)                                        │
+└──────────────────────┬──────────────────────────────────────────────────┘
+                       │ Match Result
+                       ├─────────────────┐
+                       │                 │
+        ┌──────────────┴──────┐  ┌──────┴──────────────┐
+        │   ✅ MATCH          │  │   ❌ MISMATCH       │
+        │   • Update health   │  │   • Record incident │
+        │   • Increment OK    │  │   • Auto-resync     │
+        └─────────────────────┘  │   • Export bundle   │
+                                 └─────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────┐
+│                      Frame Buffer (Ring Buffer)                         │
+│  • Last 2000 frames per symbol                                         │
+│  • Raw JSON strings (timestamped)                                      │
+│  • Used for incident bundles (t-30s to t+5s window)                    │
+└──────────────────────┬──────────────────────────────────────────────────┘
+                       │
+                       v
+┌─────────────────────────────────────────────────────────────────────────┐
+│                         Recorder                                        │
+│  • Write frames to NDJSON file                                         │
+│  • Format: {"ts":"...","raw_frame":"...","decoded_event":null}         │
+│  • Toggle on/off via [R] key or --record flag                          │
+│  • Deterministic replay via Replayer                                   │
+└─────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────┐
+│                    Incident Manager                                     │
+│  • Trigger on: checksum mismatch, rate limit, disconnect               │
+│  • Capture: metadata, config, health, frames, orderbook, checksums     │
+│  • Export: ZIP bundle (./incidents/incident_*.zip)                     │
+│  • Reproducible: replay bundle with same fault injection               │
+└─────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────┐
+│                    Fault Injector (Replay Mode)                         │
+│  • Drop frame: Skip a book update                                      │
+│  • Reorder: Swap two consecutive frames                                │
+│  • Mutate qty: Add/subtract smallest increment                         │
+│  • Configurable: --fault TYPE --once-at N                              │
+│  • Guaranteed mismatch for demos                                       │
+└─────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────┐
+│                      Shared State (AppState)                            │
+│  • DashMap<String, Orderbook>         (per-symbol orderbooks)          │
+│  • DashMap<String, SymbolHealth>      (OK/fail counts, rates)          │
+│  • DashMap<String, IntegrityProof>    (checksum details, latency)      │
+│  • VecDeque<UiEvent>                  (event log for TUI)              │
+│  • Arc<RwLock<Recorder>>              (recording state)                │
+│  • Arc<DashMap<String, VecDeque>>     (frame buffers)                  │
+└──────────────────────┬──────────────────────────────────────────────────┘
+                       │
+        ┌──────────────┼──────────────┐
+        │              │              │
+        v              v              v
+┌──────────────┐  ┌──────────────┐  ┌──────────────┐
+│   TUI (Ratatui) │  │  HTTP API (Axum)│  │   Metrics (Prometheus)│
+│                │  │                │  │                        │
+│ • Integrity Tab│  │ • /health      │  │ • checksum_ok_total   │
+│ • Orderbook    │  │ • /orderbook   │  │ • checksum_fail_total │
+│ • Inspector    │  │ • /export-bug  │  │ • message_latency_ms  │
+│ • Events       │  │ • /metrics     │  │                        │
+│ • [R] Record   │  │                │  │                        │
+│ • [E] Export   │  │                │  │                        │
+│ • [D] Fault    │  │                │  │                        │
+└──────────────┘  └──────────────┘  └──────────────┘
 ```
 
 ---

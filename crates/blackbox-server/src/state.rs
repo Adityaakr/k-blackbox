@@ -25,6 +25,7 @@ pub enum UiEvent {
     IncidentCaptured { id: String, reason: String },
     IncidentExported { path: String },
     FaultInjected { fault_type: String, symbol: String },
+    Error(String),
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -55,6 +56,10 @@ pub struct AppState {
     pub integrity_proofs: Arc<DashMap<String, IntegrityProof>>, // Per-symbol integrity proofs
     pub fault_injector: Arc<crate::integrity::fault::FaultInjector>, // Fault injection state
     pub requested_symbols: Arc<RwLock<Vec<String>>>, // Symbols requested via CLI args
+    pub recording_enabled: Arc<RwLock<bool>>, // Recording toggle state
+    pub recording_path: Arc<RwLock<Option<String>>>, // Current recording file path
+    pub recorder: Arc<RwLock<Option<blackbox_core::recorder::Recorder>>>, // Shared recorder instance
+    pub last_resync: Arc<DashMap<String, Instant>>, // Last resync time per symbol (for backoff)
 }
 
 impl AppState {
@@ -73,7 +78,39 @@ impl AppState {
             integrity_proofs: Arc::new(DashMap::new()),
             fault_injector: Arc::new(crate::integrity::fault::FaultInjector::new()),
             requested_symbols: Arc::new(RwLock::new(Vec::new())),
+            recording_enabled: Arc::new(RwLock::new(false)),
+            recording_path: Arc::new(RwLock::new(None)),
+            recorder: Arc::new(RwLock::new(None)),
+            last_resync: Arc::new(DashMap::new()),
         }
+    }
+    
+    pub async fn set_recording_enabled(&self, enabled: bool) {
+        *self.recording_enabled.write().await = enabled;
+    }
+    
+    pub async fn is_recording_enabled(&self) -> bool {
+        *self.recording_enabled.read().await
+    }
+    
+    pub async fn set_recording_path(&self, path: Option<String>) {
+        *self.recording_path.write().await = path;
+    }
+    
+    pub async fn get_recording_path(&self) -> Option<String> {
+        self.recording_path.read().await.clone()
+    }
+    
+    pub fn can_resync(&self, symbol: &str) -> bool {
+        if let Some(last) = self.last_resync.get(symbol) {
+            last.elapsed().as_secs() >= 3 // Min 3s between resyncs
+        } else {
+            true
+        }
+    }
+    
+    pub fn record_resync(&self, symbol: &str) {
+        self.last_resync.insert(symbol.to_string(), Instant::now());
     }
     
     pub async fn set_requested_symbols(&self, symbols: Vec<String>) {

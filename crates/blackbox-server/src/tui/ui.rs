@@ -9,7 +9,7 @@ use crossterm::event::{self, Event, KeyEventKind};
 use crossterm::execute;
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen};
 use ratatui::backend::CrosstermBackend;
-use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect, Margin};
+use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
@@ -107,6 +107,9 @@ pub async fn run_tui_with_manager(
                                         }
                                     }
                                 }
+                            }
+                            crate::tui::keys::TuiAction::ToggleRecording => {
+                                handle_toggle_recording(&app.state).await;
                             }
                             crate::tui::keys::TuiAction::InjectFault => {
                                 if let Some(symbol) = app.get_selected_symbol(&snapshot) {
@@ -207,7 +210,7 @@ fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
         .split(popup_layout[1])[1]
 }
 
-fn render_header(f: &mut Frame, area: Rect, snapshot: &UiSnapshot, app: &TuiApp) {
+fn render_header(f: &mut Frame, area: Rect, snapshot: &UiSnapshot, _app: &TuiApp) {
     let status_icon = if snapshot.connected { "●" } else { "○" };
     let status_color = if snapshot.connected { Color::Green } else { Color::Red };
     let recording_status = if snapshot.recording_path.is_some() { "ON" } else { "OFF" };
@@ -338,6 +341,47 @@ fn render_placeholder_tab(f: &mut Frame, area: Rect, message: &str) {
     f.render_widget(paragraph, area);
 }
 
+async fn handle_toggle_recording(state: &AppState) {
+    use crate::state::UiEvent;
+    use blackbox_core::recorder::Recorder;
+    use std::path::PathBuf;
+    
+    let currently_enabled = state.is_recording_enabled().await;
+    
+    if currently_enabled {
+        // Stop recording
+        let mut recorder = state.recorder.write().await;
+        if let Some(ref mut rec) = *recorder {
+            let _ = rec.close();
+        }
+        *recorder = None;
+        state.set_recording_enabled(false).await;
+        state.set_recording_path(None).await;
+        state.push_event(UiEvent::RecordStopped).await;
+        tracing::info!("Recording stopped");
+    } else {
+        // Start recording - generate filename
+        let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S");
+        let path = format!("recording_{}.ndjson", timestamp);
+        let path_buf = PathBuf::from(&path);
+        
+        match Recorder::new(path_buf.clone()) {
+            Ok(rec) => {
+                let mut recorder = state.recorder.write().await;
+                *recorder = Some(rec);
+                state.set_recording_enabled(true).await;
+                state.set_recording_path(Some(path.clone())).await;
+                state.push_event(UiEvent::RecordStarted { path: path.clone() }).await;
+                tracing::info!("Recording started: {}", path);
+            }
+            Err(e) => {
+                tracing::error!("Failed to start recording: {}", e);
+                state.push_event(UiEvent::Error(format!("Record failed: {}", e))).await;
+            }
+        }
+    }
+}
+
 async fn handle_fault_injection(state: &AppState, symbol: &str) {
     use crate::state::UiEvent;
     
@@ -372,7 +416,6 @@ async fn handle_replay_incident(state: &AppState) {
 
 async fn replay_incident_frames(state: &AppState, frames_path: &std::path::Path) -> anyhow::Result<()> {
     // Read NDJSON file and replay frames
-    use blackbox_ws::parser::parse_frame;
     use crate::state::UiEvent;
     
     let content = tokio::fs::read_to_string(frames_path).await?;
@@ -384,14 +427,12 @@ async fn replay_incident_frames(state: &AppState, frames_path: &std::path::Path)
         }
         
         // Parse NDJSON: {"ts":"...","raw_frame":"..."}
-        if let Ok(json) = serde_json::from_str::<serde_json::Value>(line) {
-            if let Some(raw_frame) = json.get("raw_frame").and_then(|v| v.as_str()) {
-                // Parse and process frame
-                // This would route through the same processor
-                // For now, just log
-                if idx % 100 == 0 {
-                    tracing::info!("Replay progress: {}/{}", idx, lines.len());
-                }
+        if let Ok(_json) = serde_json::from_str::<serde_json::Value>(line) {
+            // Parse and process frame
+            // This would route through the same processor
+            // For now, just log
+            if idx % 100 == 0 {
+                tracing::info!("Replay progress: {}/{}", idx, lines.len());
             }
         }
     }
@@ -402,8 +443,6 @@ async fn replay_incident_frames(state: &AppState, frames_path: &std::path::Path)
 
 async fn handle_export_incident(state: &AppState, manager: &Arc<IncidentManager>) -> anyhow::Result<String> {
     use crate::state::UiEvent;
-    use crate::integrity::incident::IncidentMeta;
-    use blackbox_core::incident::IncidentReason;
     use std::io::Write;
     use zip::write::{FileOptions, ZipWriter};
     use zip::CompressionMethod;

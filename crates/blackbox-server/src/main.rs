@@ -611,6 +611,24 @@ async fn run_tui_mode(
     let incidents_dir = PathBuf::from("./incidents");
     let incident_manager = Arc::new(IncidentManager::new(incidents_dir)?);
 
+    // Create recorder if needed (for both mock and live mode)
+    // Store it in AppState so mock mode can access it
+    use crate::state::UiEvent;
+    if let Some(path) = record_path.clone() {
+        match Recorder::new(path.clone()) {
+            Ok(rec) => {
+                let mut recorder_guard = state.recorder.write().await;
+                *recorder_guard = Some(rec);
+                state.set_recording_enabled(true).await;
+                state.set_recording_path(Some(path.to_string_lossy().to_string())).await;
+                state.push_event(UiEvent::RecordStarted { path: path.to_string_lossy().to_string() }).await;
+            }
+            Err(e) => {
+                warn!("Failed to create recorder: {}", e);
+            }
+        }
+    }
+    
     if mock {
         // Mock mode: spawn fake data generator
         let state_clone = state.clone();
@@ -644,12 +662,6 @@ async fn run_tui_mode(
         let ping_interval = parse_duration(&ping_interval_str)
             .context("Invalid ping interval format")?;
         
-        let recorder = if let Some(path) = record_path.clone() {
-            Some(Recorder::new(path)?)
-        } else {
-            None
-        };
-        
         let (ws_tx, mut ws_rx) = mpsc::unbounded_channel();
         let client = WsClient::new(symbols.clone(), depth, ping_interval, ws_tx);
         let client_handle = tokio::spawn(async move {
@@ -658,11 +670,13 @@ async fn run_tui_mode(
             }
         });
         
+        // Store recorder in AppState if provided (for live mode)
+        // (Already done above for both mock and live mode)
+        
         let state_clone = state.clone();
         let incident_manager_clone = incident_manager.clone();
-        let mut recorder_mut = recorder;
         let processor_handle = tokio::spawn(async move {
-            process_ws_events_with_logging(&state_clone, &incident_manager_clone, &mut ws_rx, recorder_mut.as_mut()).await;
+            process_ws_events_with_logging(&state_clone, &incident_manager_clone, &mut ws_rx, None).await;
         });
         
         tokio::spawn(async move {
@@ -751,6 +765,24 @@ async fn mock_data_generator(state: AppState, symbols: Vec<String>) {
         
         // Update fake health metrics and orderbooks for all symbols
         for symbol in &symbols {
+            // Generate a fake frame string for recording
+            let fake_frame = serde_json::json!({
+                "channel": "book",
+                "data": [{
+                    "symbol": symbol,
+                    "timestamp": chrono::Utc::now().to_rfc3339(),
+                    "update_id": counter,
+                }]
+            });
+            let frame_str = serde_json::to_string(&fake_frame).unwrap_or_default();
+            
+            // Record frame if recording is enabled
+            if state.is_recording_enabled().await {
+                let mut recorder_guard = state.recorder.write().await;
+                if let Some(ref mut rec) = *recorder_guard {
+                    let _ = rec.record_frame(&frame_str, None);
+                }
+            }
             if let Some(mut health) = state.health.get_mut(symbol) {
                 health.connected = true;
                 health.record_message();
@@ -1033,6 +1065,14 @@ async fn process_ws_events_with_logging(
                 state.push_event(UiEvent::Disconnected).await;
             }
             WsEvent::Frame(raw_frame) => {
+                // Check state-based recorder first (for TUI toggle)
+                if state.is_recording_enabled().await {
+                    let mut rec_guard = state.recorder.write().await;
+                    if let Some(ref mut r) = *rec_guard {
+                        let _ = r.record_frame(&raw_frame, None);
+                    }
+                }
+                // Also use passed recorder if provided (for CLI --record)
                 if let Some(ref mut rec) = recorder {
                     let _ = rec.record_frame(&raw_frame, None);
                 }
@@ -1103,6 +1143,16 @@ async fn process_ws_events_with_logging(
                             health.record_checksum_fail();
                             state.push_event(UiEvent::ChecksumMismatch { symbol: symbol.clone() }).await;
                             
+                                // Auto-resync: request resubscribe if backoff allows
+                                // Note: Full resubscribe requires WsClient changes (see FEATURE_VERIFICATION.md)
+                                // For now, we just increment the counter and log
+                                if state.can_resync(&symbol) {
+                                    state.record_resync(&symbol);
+                                    health.reconnect_count += 1; // Increment resync count
+                                    state.push_event(UiEvent::ResyncStarted { symbol: symbol.clone() }).await;
+                                    warn!("Auto-resync triggered for {} due to checksum mismatch (resubscribe requires WsClient integration)", symbol);
+                                }
+                            
                             let incident = incident_manager
                                 .record_incident(
                                     IncidentReason::ChecksumMismatch,
@@ -1137,7 +1187,7 @@ async fn process_ws_events_with_logging(
             }
             WsEvent::BookUpdate {
                 symbol,
-                mut bids,
+                bids,
                 mut asks,
                 checksum,
                 timestamp: _,
@@ -1198,6 +1248,16 @@ async fn process_ws_events_with_logging(
                             } else {
                                 health.record_checksum_fail();
                                 state.push_event(UiEvent::ChecksumMismatch { symbol: symbol.clone() }).await;
+                                
+                                // Auto-resync: request resubscribe if backoff allows
+                                // Note: Full resubscribe requires WsClient changes (see FEATURE_VERIFICATION.md)
+                                // For now, we just increment the counter and log
+                                if state.can_resync(&symbol) {
+                                    state.record_resync(&symbol);
+                                    health.reconnect_count += 1; // Increment resync count
+                                    state.push_event(UiEvent::ResyncStarted { symbol: symbol.clone() }).await;
+                                    warn!("Auto-resync triggered for {} due to checksum mismatch (resubscribe requires WsClient integration)", symbol);
+                                }
                                 
                                 let incident = incident_manager
                                     .record_incident(

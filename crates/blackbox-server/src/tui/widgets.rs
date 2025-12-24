@@ -40,6 +40,12 @@ pub fn render_integrity_badge(f: &mut Frame, area: Rect, snapshot: &crate::tui::
     
     let uptime_str = format_duration(snapshot.uptime_seconds);
     
+    // Proof mode banner: show last event
+    let last_event = snapshot.events.last().map(|e| e.text.as_str()).unwrap_or("No events");
+    let event_color = snapshot.events.last()
+        .map(|e| e.color.to_color())
+        .unwrap_or(Color::White);
+    
     let lines = vec![
         Line::from(vec![
             Span::styled(badge_text, Style::default().fg(badge_color).add_modifier(Modifier::BOLD)),
@@ -52,6 +58,11 @@ pub fn render_integrity_badge(f: &mut Frame, area: Rect, snapshot: &crate::tui::
         Line::from(vec![
             Span::raw("Incidents: "),
             Span::styled(snapshot.incident_count.to_string(), Style::default().fg(Color::White)),
+        ]),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("Last Event: ", Style::default().fg(Color::Yellow)),
+            Span::styled(last_event, Style::default().fg(event_color)),
         ]),
         Line::from(vec![
             Span::raw("Last: "),
