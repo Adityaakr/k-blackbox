@@ -442,5 +442,3 @@ Contributions welcome. Please open an issue first for significant changes.
 MIT License - see [LICENSE](./LICENSE) file for details.
 
 ---
-
-**Built for Kraken Forge SDK Client Track** | [GitHub](https://github.com/Adityaakr/k-blackbox)
