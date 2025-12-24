@@ -8,8 +8,8 @@
 
 **Why this wins vs throughput SDKs:** High-performance SDKs fail silently. Blackbox makes data integrity observable—you see checksums match in real-time, and when they don't, you get a reproducible incident bundle with full diagnostic context.
 <img width="819" height="350" alt="Screenshot 2025-12-24 at 8 23 52 PM" src="https://github.com/user-attachments/assets/309994fc-4813-4d25-aa1f-28b2358cbe87" />
+<img width="1031" height="648" alt="Screenshot 2025-12-24 at 9 35 43 PM" src="https://github.com/user-attachments/assets/63673d26-7f5b-4bab-8dee-ed0316fd84fc" />
 
-<img width="833" height="344" alt="Screenshot 2025-12-24 at 8 25 27 PM" src="https://github.com/user-attachments/assets/69647a37-190c-44c6-8d75-e0e6aa9d0a17" />
 <img width="322" height="160" alt="Screenshot 2025-12-24 at 8 25 52 PM" src="https://github.com/user-attachments/assets/38371790-c504-4af7-a0cb-3e498126ce26" />
 
 <img width="330" height="89" alt="Screenshot 2025-12-24 at 8 27 54 PM" src="https://github.com/user-attachments/assets/7502e3db-7d78-4dbd-9ba8-28541cb7ec79" />
