@@ -171,8 +171,8 @@ Comprehensive documentation in `/docs`:
 
 **Getting Started:**
 - **[Demo](./docs/QUICK_TEST.md)** - 30-second quick start with test script (`./test.sh`)
-- **[API](./docs/api.md)** - Complete judge demo walkthrough (2 minutes)
-- **[Testing](./docs/testing.md)** - Exact commands that work end-to-end
+- **[API](./docs/API.md)** - Complete judge demo walkthrough (2 minutes)
+- **[Testing](./docs/TESTING.md)** - Exact commands that work end-to-end
 
 **Test Scripts:**
 - `./test.sh` - Quick test with multiple pairs (BTC/USD, ETH/USD, SOL/USD, AVAX/USD)
