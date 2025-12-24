@@ -1,6 +1,6 @@
 # Testing Guide
 
-Comprehensive testing guide for Kraken Blackbox, covering unit tests, integration tests, and manual verification.
+Comprehensive testing guide for Kraken Blackbox, covering unit tests, integration tests, manual verification, TUI testing, and incident bundle replay.
 
 ---
 
@@ -12,12 +12,31 @@ Run the automated test script:
 ./test.sh
 ```
 
-This script:
-1. Starts the server
-2. Waits for connection
-3. Tests all HTTP endpoints
-4. Checks for errors
-5. Reports results
+This comprehensive script:
+1. Builds the project in release mode
+2. Tests TUI in mock mode
+3. Tests HTTP API endpoints (health, orderbook, export-bug)
+4. Tests recording functionality
+5. Tests replay functionality
+6. Tests fault injection
+7. Tests incident replay (if bundles exist)
+8. Runs unit tests
+9. Reports results
+
+**Expected output:**
+```
+╔════════════════════════════════════════════════════════════╗
+║     Kraken Blackbox - Comprehensive Test Suite            ║
+╚════════════════════════════════════════════════════════════╝
+
+✓ Build successful
+✓ Mock mode test completed
+✓ Health endpoint working
+✓ Book endpoint working
+...
+```
+
+**Time:** ~2-3 minutes (includes build time)
 
 ---
 
@@ -79,22 +98,18 @@ cargo test test_kraken_example_checksum -- --nocapture
 ```
 
 **What it tests:**
-- Server startup
+- Build process
+- TUI mock mode
+- HTTP API server startup
 - WebSocket connection
 - Health endpoint
 - Top of book endpoint
 - Full orderbook endpoint
-- Error detection
-
-**Expected output:**
-```
-🚀 Starting Kraken Blackbox Test...
-✅ Health check passed
-✅ Top of book data received
-✅ Orderbook has 3 bid levels
-✅ No errors found in logs
-✅ All tests completed!
-```
+- Export-bug endpoint
+- Recording functionality
+- Replay functionality
+- Fault injection
+- Incident replay
 
 ### Manual Integration Test
 
@@ -113,6 +128,11 @@ Wait 15-20 seconds for connection to establish.
 
 ```bash
 curl http://127.0.0.1:8080/health | python3 -m json.tool
+```
+
+**Or with jq:**
+```bash
+curl -s http://127.0.0.1:8080/health | jq .
 ```
 
 **Expected:**
@@ -161,14 +181,15 @@ curl http://127.0.0.1:8080/metrics
 ```bash
 # Start with multiple symbols
 ./target/release/blackbox run \
-  --symbols BTC/USD,ETH/USD,SOL/USD \
+  --symbols BTC/USD,ETH/USD,SOL/USD,AVAX/USD \
   --depth 25 \
   --http 127.0.0.1:8080
 
-# Test each symbol
+# Test each symbol (wait 20 seconds first)
 curl http://127.0.0.1:8080/book/BTC%2FUSD/top
 curl http://127.0.0.1:8080/book/ETH%2FUSD/top
 curl http://127.0.0.1:8080/book/SOL%2FUSD/top
+curl http://127.0.0.1:8080/book/AVAX%2FUSD/top
 ```
 
 **Verify:**
@@ -196,7 +217,7 @@ head -3 test-recording.ndjson
 **Expected:**
 - File exists
 - Contains NDJSON lines (one per frame)
-- Each line is valid JSON
+- Each line is valid JSON with `ts` and `raw_frame` fields
 
 ### Test Replay
 
@@ -217,27 +238,147 @@ curl http://127.0.0.1:8081/book/BTC%2FUSD/top
 - Orderbook state is recreated
 - Checksums are verified during replay
 
+### Test Fault Injection
+
+```bash
+# Replay with fault injection (mutate qty at frame 50)
+./target/release/blackbox replay \
+  --input ./test-recording.ndjson \
+  --speed 4.0 \
+  --http 127.0.0.1:8081 \
+  --fault-mutate-once 50 \
+  --fault-mutate-delta 1
+```
+
+**Verify:**
+- Fault is injected at the specified frame
+- Checksum mismatch occurs
+- Incident is captured
+
 ### Test Bug Export
 
 ```bash
-# While server is running, export bug bundle
-curl -X POST http://127.0.0.1:8080/export-bug \
-  -H "Content-Type: application/json" \
-  -o bug-bundle.zip
+# While server is running, export incident bundle
+curl -X POST http://127.0.0.1:8080/export-bug -o incident.zip
 
 # Extract and verify contents
-unzip bug-bundle.zip -d bug-bundle/
-ls -la bug-bundle/
-cat bug-bundle/config.json
-cat bug-bundle/health.json
-head -5 bug-bundle/frames.ndjson
-cat bug-bundle/instruments.json
+unzip incident.zip -d incident/
+ls -la incident/
+
+# View contents
+cat incident/metadata.json | jq .
+cat incident/health.json | jq .
+head -5 incident/frames.ndjson
 ```
 
 **Expected:**
 - ZIP file created successfully
-- Contains all 4 files: `config.json`, `health.json`, `frames.ndjson`, `instruments.json`
-- All files contain valid JSON
+- Contains files: `metadata.json`, `config.json`, `health.json`, `frames.ndjson`
+- Optionally contains: `instrument.json`, `book_top.json`
+- All files contain valid JSON/NDJSON
+
+### Test Incident Replay
+
+```bash
+# Replay an incident bundle
+./target/release/blackbox replay-incident \
+  --bundle ./incidents/incident_*.zip \
+  --speed 4.0 \
+  --http 127.0.0.1:8082
+```
+
+**Verify:**
+- Bundle is extracted correctly
+- Frames are replayed through the same pipeline
+- Orderbook state is recreated
+- Checksums are verified
+
+---
+
+## TUI Testing
+
+### Test TUI in Mock Mode
+
+```bash
+# Start TUI with mock data (no internet required)
+./target/release/blackbox tui \
+  --symbols BTC/USD,ETH/USD,SOL/USD \
+  --depth 10 \
+  --mock
+```
+
+**Verify:**
+- TUI starts successfully
+- Shows Integrity Inspector
+- Shows orderbook display
+- Shows health metrics
+- Press `Q` to quit
+
+### Test TUI in Live Mode
+
+```bash
+# Start TUI with live data
+./target/release/blackbox tui \
+  --symbols BTC/USD,ETH/USD,SOL/USD,AVAX/USD \
+  --depth 10
+```
+
+**Verify:**
+- TUI connects to Kraken WebSocket
+- Shows real-time orderbook data
+- Shows live checksum verification
+- Shows verify latency telemetry (Last/Avg/P95)
+- Use `↑↓` to select symbols
+- Press `R` to toggle recording
+- Press `E` to export incident bundle
+- Press `D` to inject fault (demo)
+- Press `P` to replay last incident
+- Press `?` for help
+- Press `Q` to quit
+
+### Test TUI Recording
+
+```bash
+# Start TUI with recording
+./target/release/blackbox tui \
+  --symbols BTC/USD \
+  --depth 10 \
+  --record session.ndjson
+
+# Press R to start recording (if not started automatically)
+# Wait 10-20 seconds
+# Press R again to stop recording
+# Press Q to quit
+
+# Verify recording file
+wc -l session.ndjson
+head -3 session.ndjson
+```
+
+**Expected:**
+- Recording file created
+- Contains NDJSON frames
+- File can be replayed
+
+### Test TUI Replay with Fault Injection
+
+```bash
+# Replay a recording with fault injection
+./target/release/blackbox tui \
+  --symbols BTC/USD \
+  --depth 10 \
+  --replay session.ndjson \
+  --fault mutate_qty \
+  --once-at 50 \
+  --speed 4.0
+```
+
+**Verify:**
+- TUI shows replay mode
+- Fault is injected at frame 50
+- Checksum mismatch occurs
+- Incident is captured
+- Event log shows `FAULT_INJECTED`, `CHECKSUM_MISMATCH`, `INCIDENT_CAPTURED`
 
 ---
 
@@ -250,6 +391,11 @@ Monitor message rate:
 ```bash
 # Watch health endpoint
 watch -n 1 'curl -s http://127.0.0.1:8080/health | python3 -c "import sys, json; d=json.load(sys.stdin); s=d[\"symbols\"][0]; print(f\"Rate: {s[\"msg_rate_estimate\"]:.1f} msg/s, Total: {s[\"total_msgs\"]}\")"'
+```
+
+**Or with jq:**
+```bash
+watch -n 1 'curl -s http://127.0.0.1:8080/health | jq ".symbols[0] | {rate: .msg_rate_estimate, total: .total_msgs}"'
 ```
 
 **Expected:**
@@ -272,6 +418,22 @@ done
 **Expected:**
 - Prices update in real-time
 - No stale data (prices change over time)
+
+### Checksum Verification Latency
+
+Check verify latency in TUI:
+1. Start TUI in live mode
+2. Select a symbol with `↑↓`
+3. View Integrity Inspector
+4. Check "Verify Latency" section:
+   - **Last**: Last verification latency in ms
+   - **Avg**: Average latency
+   - **P95**: 95th percentile latency
+
+**Expected:**
+- Last latency < 10ms
+- Average latency < 10ms
+- P95 latency < 10ms
 
 ---
 
@@ -319,7 +481,7 @@ done
 curl http://127.0.0.1:8080/book/INVALID%2FSYMBOL/top
 ```
 
-**Expected:** `404 Not Found` or empty data
+**Expected:** `404 Not Found` or empty data with `null` values
 
 ### Test Network Disconnection
 
@@ -342,7 +504,7 @@ Checksum mismatches should be:
 
 Monitor for mismatches:
 ```bash
-curl -s http://127.0.0.1:8080/health | python3 -c "import sys, json; d=json.load(sys.stdin); s=d['symbols'][0]; print(f\"Checksum OK: {s['checksum_ok']}, Fail: {s['checksum_fail']}, Rate: {s['checksum_ok']/(s['checksum_ok']+s['checksum_fail'])*100:.2f}%\")"
+curl -s http://127.0.0.1:8080/health | python3 -c "import sys, json; d=json.load(sys.stdin); s=d['symbols'][0]; print(f\"Checksum OK: {s['checksum_ok']}, Fail: {s['checksum_fail']}, Rate: {s['checksum_ok']/(s['checksum_ok']+s['checksum_fail']+1)*100:.2f}%\")"
 ```
 
 ---
@@ -350,14 +512,15 @@ curl -s http://127.0.0.1:8080/health | python3 -c "import sys, json; d=json.load
 ## Browser Testing
 
 Open endpoints in browser:
-
 - Health: http://127.0.0.1:8080/health
 - Top of Book: http://127.0.0.1:8080/book/BTC%2FUSD/top
 - Full Book: http://127.0.0.1:8080/book/BTC%2FUSD?limit=5
+- Root (Web UI): http://127.0.0.1:8080/
 
 **Verify:**
 - JSON renders correctly
 - Data updates on refresh
+- Web UI shows all symbols and health metrics
 - No CORS errors (if accessing from different origin, may need CORS headers)
 
 ---
@@ -376,7 +539,7 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v3
       - uses: actions-rs/toolchain@v1
         with:
           toolchain: stable
@@ -403,7 +566,7 @@ jobs:
 
 ### Tests Fail: "Checksum failures"
 
-- Occasional failures are normal
+- Occasional failures are normal (< 1%)
 - If > 1% failure rate, investigate
 - Check logs for details
 - Verify precision handling is correct
@@ -414,6 +577,12 @@ jobs:
 - Verify Kraken WebSocket is accessible
 - Check firewall settings
 - Review server logs for errors
+
+### TUI Tests Fail: "Device not configured"
+
+- Ensure you're running in a terminal (not a non-interactive shell)
+- Check `$TERM` environment variable
+- Try running in a different terminal emulator
 
 ---
 
@@ -426,12 +595,16 @@ Current test coverage includes:
 - ✅ HTTP API endpoints
 - ✅ WebSocket connection
 - ✅ Recording/replay
+- ✅ Fault injection
+- ✅ Incident bundle export/replay
+- ✅ TUI functionality
 
 Areas for improvement:
 - More edge cases in orderbook updates
 - Reconnection scenarios
 - Rate limit handling
 - Error recovery
+- Long-running stability tests
 
 ---
 
@@ -441,4 +614,4 @@ Areas for improvement:
 2. Add fuzzing for frame parsing
 3. Add load testing with multiple concurrent clients
 4. Add integration tests in CI/CD pipeline
-
+5. Add end-to-end tests with real Kraken WebSocket

@@ -1,6 +1,6 @@
 # HTTP API Reference
 
-Kraken Blackbox exposes a local HTTP API for querying orderbooks, health metrics, and exporting bug bundles. All endpoints return JSON unless otherwise specified.
+Kraken Blackbox exposes a local HTTP API for querying orderbooks, health metrics, and exporting incident bundles. All endpoints return JSON unless otherwise specified.
 
 **Base URL**: `http://127.0.0.1:8080` (default, configurable via `--http` flag)
 
@@ -83,13 +83,13 @@ curl http://127.0.0.1:8080/book/BTC%2FUSD/top
 
 **Response Fields:**
 - `symbol`: Trading pair symbol
-- `best_bid`: `[price, quantity]` tuple for best bid (highest buy price)
-- `best_ask`: `[price, quantity]` tuple for best ask (lowest sell price)
-- `spread`: Spread between best bid and ask (as string)
-- `mid`: Mid price (average of best bid and ask, as string)
+- `best_bid`: `[price, quantity]` tuple for best bid (highest buy price), or `null` if no data
+- `best_ask`: `[price, quantity]` tuple for best ask (lowest sell price), or `null` if no data
+- `spread`: Spread between best bid and ask (as string), or `null` if no data
+- `mid`: Mid price (average of best bid and ask, as string), or `null` if no data
 
 **Status Codes:**
-- `200 OK`: Success
+- `200 OK`: Success (may return `null` values if symbol not found)
 - `404 Not Found`: Symbol not found or no data available
 
 **Example with different symbol:**
@@ -173,56 +173,47 @@ curl http://127.0.0.1:8080/metrics
 
 ### `POST /export-bug`
 
-Exports a bug bundle ZIP file containing configuration, health state, recent WebSocket frames, and instrument snapshots.
+Exports an incident bundle ZIP file containing configuration, health state, recent WebSocket frames, orderbook snapshot, and instrument information.
 
 **Request:**
 ```bash
-curl -X POST http://127.0.0.1:8080/export-bug \
-  -H "Content-Type: application/json" \
-  -o bug-bundle.zip
-```
-
-**Request Body:** (optional, currently not used)
-```json
-{
-  "symbol": "BTC/USD"
-}
+curl -X POST http://127.0.0.1:8080/export-bug -o incident.zip
 ```
 
 **Response:**
-```json
-{
-  "path": "./bug_bundles/incident_1705312200.zip",
-  "incident_id": "incident_1705312200"
-}
-```
-
-**Response Fields:**
-- `path`: Local file path where the ZIP was created
-- `incident_id`: Unique identifier for this incident/bug bundle
+- **Content-Type**: `application/zip`
+- **Content-Disposition**: `attachment; filename="incident_<timestamp>_<reason>.zip"`
+- **Body**: ZIP file bytes
 
 **Status Codes:**
-- `200 OK`: Success, ZIP file created
-- `500 Internal Server Error`: Failed to create bug bundle
+- `200 OK`: Success, ZIP file returned
+- `500 Internal Server Error`: Failed to create incident bundle
 
-**Bug Bundle Contents:**
+**Incident Bundle Contents:**
 The ZIP file contains:
+- `metadata.json`: Incident metadata (incident info, config, health, instrument, book_top)
 - `config.json`: Configuration snapshot (symbols, timestamp)
 - `health.json`: Current health state (same as `/health` endpoint)
-- `frames.ndjson`: Raw WebSocket frames from last 60 seconds (NDJSON format)
-- `instruments.json`: Instrument snapshot with precisions and increments
+- `frames.ndjson`: Raw WebSocket frames from last 30 seconds before incident to 5 seconds after (NDJSON format, one `RecordedFrame` per line)
+- `instrument.json` (optional): Instrument snapshot with precisions and increments
+- `book_top.json` (optional): Top of book snapshot at incident time
 
 **Example:**
 ```bash
-# Export bug bundle
-curl -X POST http://127.0.0.1:8080/export-bug -o bug-bundle.zip
+# Export incident bundle
+curl -X POST http://127.0.0.1:8080/export-bug -o incident.zip
 
 # Extract and inspect
-unzip bug-bundle.zip -d bug-bundle/
-cat bug-bundle/config.json
-cat bug-bundle/health.json
-head -5 bug-bundle/frames.ndjson
+unzip incident.zip -d incident/
+ls -la incident/
+
+# View contents
+cat incident/metadata.json | jq .
+cat incident/health.json | jq .
+head -5 incident/frames.ndjson
 ```
+
+**Note**: The ZIP file is also saved to `./incidents/<incident_id>.zip` on the server.
 
 ---
 
@@ -279,11 +270,11 @@ for symbol in BTC/USD ETH/USD SOL/USD; do
 done
 ```
 
-### Export bug bundle and extract
+### Export incident bundle and extract
 ```bash
-curl -X POST http://127.0.0.1:8080/export-bug -o bug.zip && \
-unzip -q bug.zip -d bug/ && \
-ls -lh bug/
+curl -X POST http://127.0.0.1:8080/export-bug -o incident.zip && \
+unzip -q incident.zip -d incident/ && \
+ls -lh incident/
 ```
 
 ---
@@ -291,4 +282,3 @@ ls -lh bug/
 ## SDK Usage
 
 The HTTP API is provided by the example application (`blackbox-server`). The SDK itself (`blackbox-core` + `blackbox-ws`) is event-driven and doesn't require HTTP. See the main README for SDK usage examples.
-
