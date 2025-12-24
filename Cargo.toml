@@ -35,4 +35,7 @@ chrono = { version = "0.4", features = ["serde"] }
 dashmap = "5.5"
 flate2 = "1.0"
 zip = "0.6"
+ratatui = "0.26"
+crossterm = "0.28"
+atty = "0.2"
 

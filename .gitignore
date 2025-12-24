@@ -18,6 +18,8 @@ Cargo.lock
 *.dylib
 *.dll
 *.exe
+*.sh
+*.ndjson
 
 # Documentation files (except README.md and PROJECT_DESCRIPTION.md)
 *.md

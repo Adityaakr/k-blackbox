@@ -31,4 +31,6 @@ dashmap = { workspace = true }
 flate2 = { workspace = true }
 zip = { workspace = true }
 rust_decimal = { workspace = true }
-
+ratatui = { workspace = true }
+crossterm = { workspace = true }
+atty = "0.2"

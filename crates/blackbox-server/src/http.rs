@@ -1,19 +1,16 @@
+use crate::incident::IncidentManager;
 use crate::state::AppState;
 use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
-    response::{IntoResponse, Json},
+    response::{IntoResponse, Json, Response},
     routing::{get, post},
     Router,
+    body::Body,
 };
-use blackbox_core::types::InstrumentInfo;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-use std::path::PathBuf;
-use zip::ZipWriter;
-use zip::write::FileOptions;
-use std::io::Write;
+use std::sync::Arc;
 
 #[derive(Deserialize)]
 struct BookQuery {
@@ -42,23 +39,23 @@ struct ExportBugResponse {
     incident_id: String,
 }
 
-pub fn router(state: AppState) -> Router {
+pub fn router(state: AppState, incident_manager: std::sync::Arc<crate::incident::IncidentManager>) -> Router {
     Router::new()
         .route("/health", get(health_handler))
         .route("/book/:symbol/top", get(book_top_handler))
         .route("/book/:symbol", get(book_handler))
         .route("/metrics", get(metrics_handler))
         .route("/export-bug", post(export_bug_handler))
-        .with_state(state)
+        .with_state((state, incident_manager))
 }
 
-async fn health_handler(State(state): State<AppState>) -> impl IntoResponse {
+async fn health_handler(State((state, _)): State<(AppState, Arc<IncidentManager>)>) -> impl IntoResponse {
     let overall = state.overall_health();
     Json(overall)
 }
 
 async fn book_top_handler(
-    State(state): State<AppState>,
+    State((state, _)): State<(AppState, Arc<IncidentManager>)>,
     Path(symbol): Path<String>,
 ) -> impl IntoResponse {
     if let Some(book) = state.orderbooks.get(&symbol) {
@@ -86,7 +83,7 @@ async fn book_top_handler(
 }
 
 async fn book_handler(
-    State(state): State<AppState>,
+    State((state, _)): State<(AppState, Arc<IncidentManager>)>,
     Path(symbol): Path<String>,
     Query(params): Query<BookQuery>,
 ) -> impl IntoResponse {
@@ -121,66 +118,80 @@ async fn metrics_handler() -> impl IntoResponse {
     (StatusCode::OK, "# Prometheus metrics endpoint\n# Install metrics exporter in main.rs\n")
 }
 
-async fn export_bug_handler(State(state): State<AppState>) -> axum::response::Response {
-    let incident_id = format!("incident_{}", Utc::now().timestamp());
-    let output_path = format!("./bug_bundles/{}.zip", incident_id);
+async fn export_bug_handler(
+    State((state, incident_manager)): State<(AppState, Arc<IncidentManager>)>
+) -> axum::response::Response {
+    use blackbox_core::incident::IncidentReason;
     
-    // Create directory if needed
-    if let Some(parent) = PathBuf::from(&output_path).parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
+    // Create a manual export incident
+    let incident = incident_manager
+        .record_incident(
+            IncidentReason::ManualExport,
+            None,
+            serde_json::json!({}),
+        )
+        .await;
     
-    // Create zip file
-    let file = match std::fs::File::create(&output_path) {
-        Ok(f) => f,
-        Err(e) => {
-            return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({
-                "error": format!("Failed to create bug bundle: {}", e)
-            }))).into_response();
-        }
-    };
+    // Export bundle for the first symbol or use current state
+    let symbol = state.health.iter().next().map(|e| e.key().clone());
+    let symbol_str = symbol.as_deref().unwrap_or("unknown");
     
-    let mut zip = ZipWriter::new(std::io::BufWriter::new(file));
-    let options = FileOptions::default().compression_method(zip::CompressionMethod::Deflated);
-    
-    // Write config.json
     let config = serde_json::json!({
         "symbols": state.health.iter().map(|e| e.key().clone()).collect::<Vec<_>>(),
         "timestamp": Utc::now().to_rfc3339(),
     });
-    zip.start_file("config.json", options).unwrap();
-    zip.write_all(serde_json::to_string_pretty(&config).unwrap().as_bytes()).unwrap();
     
-    // Write health.json
     let overall = state.overall_health();
-    zip.start_file("health.json", options).unwrap();
-    zip.write_all(serde_json::to_string_pretty(&overall).unwrap().as_bytes()).unwrap();
+    let health = serde_json::to_value(&overall).unwrap();
     
-    // Write frames.ndjson (last 60 seconds)
+    let instrument = state.instruments.get(symbol_str).map(|e| e.value().clone());
+    
+    let book_top = state.orderbooks.get(symbol_str).map(|book| {
+        serde_json::json!({
+            "best_bid": book.best_bid().map(|(p, q)| (p.to_string(), q.to_string())),
+            "best_ask": book.best_ask().map(|(p, q)| (p.to_string(), q.to_string())),
+        })
+    });
+    
     let frames = state.last_frames.read().await;
-    let cutoff = Utc::now() - chrono::Duration::seconds(60);
-    let recent_frames: Vec<_> = frames.iter()
-        .filter(|(ts, _)| *ts >= cutoff)
-        .collect();
+    let frames_vec: Vec<_> = frames.iter().cloned().collect();
     
-    zip.start_file("frames.ndjson", options).unwrap();
-    for (ts, frame) in recent_frames {
-        let line = format!("{{\"ts\":\"{}\",\"raw_frame\":{}}}\n", ts.to_rfc3339(), frame);
-        zip.write_all(line.as_bytes()).unwrap();
+    match incident_manager
+        .export_incident_bundle(
+            &incident,
+            config,
+            health,
+            instrument.as_ref(),
+            book_top,
+            &frames_vec,
+            incident.timestamp,
+        )
+        .await
+    {
+        Ok(path) => {
+            // Read the ZIP file and return it
+            match std::fs::read(&path) {
+                Ok(zip_bytes) => {
+                    Response::builder()
+                        .status(StatusCode::OK)
+                        .header("Content-Type", "application/zip")
+                        .header("Content-Disposition", format!("attachment; filename=\"{}.zip\"", incident.id))
+                        .body(Body::from(zip_bytes))
+                        .unwrap()
+                        .into_response()
+                }
+                Err(e) => {
+                    (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({
+                        "error": format!("Failed to read bundle: {}", e)
+                    }))).into_response()
+                }
+            }
+        }
+        Err(e) => {
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({
+                "error": format!("Failed to export bundle: {}", e)
+            }))).into_response()
+        }
     }
-    
-    // Write instrument snapshot
-    let instruments: HashMap<String, InstrumentInfo> = state.instruments.iter()
-        .map(|e| (e.key().clone(), e.value().clone()))
-        .collect();
-    zip.start_file("instruments.json", options).unwrap();
-    zip.write_all(serde_json::to_string_pretty(&instruments).unwrap().as_bytes()).unwrap();
-    
-    zip.finish().unwrap();
-    
-    Json(ExportBugResponse {
-        path: output_path,
-        incident_id,
-    }).into_response()
 }
 

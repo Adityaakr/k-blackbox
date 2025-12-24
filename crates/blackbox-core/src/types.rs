@@ -23,7 +23,7 @@ where
     use serde::de::Error;
     let value: serde_json::Value = serde::Deserialize::deserialize(deserializer)?;
     match value {
-        serde_json::Value::String(s) => {
+        serde_json::Value::String(_s) => {
             // Try to parse as ISO timestamp and convert to unix timestamp
             // For now, just return None since we don't need the timestamp
             Ok(None)
@@ -178,6 +178,7 @@ pub struct RecordedFrame {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReplayConfig {
     pub mode: ReplayMode,
+    pub fault: FaultRule,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -185,5 +186,19 @@ pub enum ReplayMode {
     Realtime,
     Speed(f64),
     AsFast,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum FaultType {
+    Drop,
+    Reorder,
+    MutateQty { delta_ticks: i32 },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum FaultRule {
+    Every { n: usize, fault: FaultType },
+    OnceAt { index: usize, fault: FaultType },
+    None,
 }
 

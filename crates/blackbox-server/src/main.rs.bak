@@ -596,15 +596,9 @@ async fn run_tui_mode(
     // Create shared state
     let state = AppState::new();
     
-    // Store requested symbols and set depth for all symbols
-    state.set_requested_symbols(symbols.clone()).await;
-    
+    // Set depth for all symbols
     for symbol in &symbols {
         state.set_depth(symbol, depth);
-        // Initialize health entry for this symbol (so it shows up in UI immediately)
-        if !state.health.contains_key(symbol) {
-            state.health.insert(symbol.clone(), blackbox_core::health::SymbolHealth::new(symbol.clone()));
-        }
     }
 
     // Create incident manager
@@ -631,14 +625,9 @@ async fn run_tui_mode(
         let config = ReplayConfig { mode, fault: fault_rule };
         
         let state_clone = state.clone();
-        let symbols_clone = symbols.clone();
         tokio::spawn(async move {
-            if let Err(e) = replay_recording_internal(replay_file, config, state_clone, symbols_clone).await {
-                error!("Replay error: {}", e);
-            }
+            replay_recording_internal(replay_file, config, state_clone).await;
         });
-        
-        // Note: We've already initialized symbols above, so they should appear in the UI
     } else {
         // Live mode
         let ping_interval = parse_duration(&ping_interval_str)
@@ -823,7 +812,6 @@ async fn replay_recording_internal(
     input: PathBuf,
     config: ReplayConfig,
     state: AppState,
-    requested_symbols: Vec<String>,
 ) -> anyhow::Result<()> {
     use crate::state::UiEvent;
     use blackbox_core::replayer::Replayer;
@@ -836,8 +824,7 @@ async fn replay_recording_internal(
     state.push_event(UiEvent::Connected).await;
     
     // Create replayer
-    let mut replayer = Replayer::new(input.clone(), config.clone())?;
-    info!("Replayer created, starting replay");
+    let mut replayer = Replayer::new(input, config.clone())?;
     replayer.start();
     
     // Create a channel to feed events to the processor
@@ -854,35 +841,29 @@ async fn replay_recording_internal(
     // Send Connected event
     let _ = ws_tx.send(WsEvent::Connected);
     
-    let mut frame_num = 0;
-    let mut consecutive_none = 0;
     loop {
         // Get next frame from replayer
-        match replayer.next_frame() {
-            Some(frame_data) => {
-                consecutive_none = 0;
-                frame_num += 1;
-                if frame_num % 50 == 0 || frame_num <= 5 {
-                    info!("Replay progress: {} frames processed", frame_num);
-                }
-                
-                // Send Frame event
-                let _ = ws_tx.send(WsEvent::Frame(frame_data.clone()));
-                
-                // Parse frame and convert to WsEvent (same logic as WsClient)
-                if let Ok(parsed) = parse_frame(&frame_data) {
-                    match parsed {
+        let frame_data = match replayer.next_frame() {
+            Some(frame) => frame,
+            None => {
+                info!("Replay completed");
+                state.push_event(UiEvent::RecordStopped).await;
+                break;
+            }
+        };
+        
+        // Send Frame event
+        let _ = ws_tx.send(WsEvent::Frame(frame_data.clone()));
+        
+        // Parse frame and convert to WsEvent (same logic as WsClient)
+        if let Ok(parsed) = parse_frame(&frame_data) {
+            match parsed {
                 blackbox_ws::parser::WsFrame::Instrument(msg) => {
                     if msg.msg_type == "snapshot" {
                         use blackbox_core::precision::parse_decimal;
                         use std::collections::HashMap;
                         let mut instruments = HashMap::new();
-                        // Filter to only include requested symbols
                         for pair in msg.data.pairs {
-                            // Only process if this symbol was requested via CLI args
-                            if !requested_symbols.is_empty() && !requested_symbols.contains(&pair.symbol) {
-                                continue;
-                            }
                             match (parse_decimal(&pair.price_increment), parse_decimal(&pair.qty_increment)) {
                                 (Ok(price_inc), Ok(qty_inc)) => {
                                     let info = blackbox_core::types::InstrumentInfo {
@@ -893,28 +874,16 @@ async fn replay_recording_internal(
                                         qty_increment: qty_inc,
                                         status: pair.status,
                                     };
-                                    instruments.insert(pair.symbol.clone(), info);
-                                    // Health already initialized from CLI args, but ensure it exists
-                                    if !state.health.contains_key(&pair.symbol) {
-                                        state.health.insert(pair.symbol.clone(), blackbox_core::health::SymbolHealth::new(pair.symbol.clone()));
-                                    }
+                                    instruments.insert(pair.symbol, info);
                                 }
                                 _ => continue,
                             }
                         }
-                        if !instruments.is_empty() {
-                            info!("Replay: Sending InstrumentSnapshot with {} instruments (filtered from recording)", instruments.len());
-                            let _ = ws_tx.send(WsEvent::InstrumentSnapshot(instruments));
-                        }
+                        let _ = ws_tx.send(WsEvent::InstrumentSnapshot(instruments));
                     }
                 }
                 blackbox_ws::parser::WsFrame::Book(msg) => {
                     for data in msg.data {
-                        // Filter: only process book events for requested symbols
-                        if !requested_symbols.is_empty() && !requested_symbols.contains(&data.symbol) {
-                            continue;
-                        }
-                        
                         use blackbox_core::precision::parse_decimal;
                         
                         let mut bids = Vec::new();
@@ -959,17 +928,13 @@ async fn replay_recording_internal(
                         }
                         
                         if msg.msg_type == "snapshot" {
-                            info!("Replay: Sending BookSnapshot for {}", data.symbol);
                             let _ = ws_tx.send(WsEvent::BookSnapshot {
-                                symbol: data.symbol.clone(),
+                                symbol: data.symbol,
                                 bids,
                                 asks,
                                 checksum: data.checksum,
                             });
                         } else {
-                            if frame_num <= 5 {
-                                info!("Replay: Sending BookUpdate for {}", data.symbol);
-                            }
                             let _ = ws_tx.send(WsEvent::BookUpdate {
                                 symbol: data.symbol,
                                 bids,
@@ -979,33 +944,16 @@ async fn replay_recording_internal(
                             });
                         }
                     }
-                    }
-                    _ => {}
                 }
-                }
-                
-                // Small delay for UI responsiveness  
-                tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
-            }
-            None => {
-                consecutive_none += 1;
-                // If we get None multiple times in a row, we're probably done
-                // (either finished or waiting for timing - in AsFast mode we should never wait)
-                if consecutive_none > 100 {
-                    info!("Replay completed after {} frames (no more frames available)", frame_num);
-                    // Small delay to ensure all events are processed
-                    tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
-                    state.push_event(UiEvent::RecordStopped).await;
-                    break;
-                }
-                // Small delay when waiting (for Realtime/Speed modes)
-                tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+                _ => {}
             }
         }
+        
+        // Small delay for UI responsiveness
+        tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
     }
     
-    // Wait for processor to finish processing remaining events
-    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+    // Wait for processor to finish
     drop(ws_tx);
     let _ = processor_handle.await;
     
@@ -1013,31 +961,167 @@ async fn replay_recording_internal(
 }
 
 async fn process_ws_events_with_logging(
-    state: &AppState,
-    incident_manager: &Arc<IncidentManager>,
-    ws_rx: &mut mpsc::UnboundedReceiver<WsEvent>,
-    mut recorder: Option<&mut Recorder>,
-) {
-    use crate::state::UiEvent;
-    use crate::integrity::{IntegrityProof, update_integrity_proof};
-    use crate::integrity::incident::IncidentMeta;
-    
-    while let Some(event) = ws_rx.recv().await {
-        match event {
-            WsEvent::Connected => {
-                info!("WebSocket connected");
-                state.push_event(UiEvent::Connected).await;
-            }
-            WsEvent::Disconnected => {
-                warn!("WebSocket disconnected");
-                state.push_event(UiEvent::Disconnected).await;
-            }
-            WsEvent::Frame(raw_frame) => {
-                if let Some(ref mut rec) = recorder {
-                    let _ = rec.record_frame(&raw_frame, None);
+                        
+                        // Create instrument info
+                        let instrument = blackbox_core::types::InstrumentInfo {
+                            symbol: pair.symbol.clone(),
+                            price_precision: pair.price_precision,
+                            qty_precision: pair.qty_precision,
+                            price_increment: pair.price_increment.parse::<rust_decimal::Decimal>()
+                                .unwrap_or(rust_decimal::Decimal::from(1) / rust_decimal::Decimal::from(100)),
+                            qty_increment: pair.qty_increment.parse::<rust_decimal::Decimal>()
+                                .unwrap_or(rust_decimal::Decimal::from(1) / rust_decimal::Decimal::from(1_000_000)),
+                            status: pair.status.clone(),
+                        };
+                        state.instruments.insert(pair.symbol.clone(), instrument);
+                        
+                        // Initialize health entry
+                        if !state.health.contains_key(&pair.symbol) {
+                            state.health.insert(pair.symbol.clone(), SymbolHealth::new(pair.symbol.clone()));
+                        }
+                        if let Some(mut health) = state.health.get_mut(&pair.symbol) {
+                            health.connected = true;
+                            health.last_msg_ts = Some(now);
+                        }
+                        
+                        // Initialize frame buffer
+                        state.get_or_create_frame_buffer(&pair.symbol);
+                    }
+                    state.push_event(UiEvent::SubscribedInstrument).await;
                 }
-                
-                let mut frames = state.last_frames.write().await;
+                blackbox_ws::parser::WsFrame::BookSnapshot { symbol, bids, asks, checksum } => {
+                    // Initialize orderbook if needed
+                    if !state.orderbooks.contains_key(&symbol) {
+                        let mut book = Orderbook::new();
+                        book.apply_snapshot(
+                            bids.iter().map(|(p, q)| (p.parse().unwrap_or_default(), q.parse().unwrap_or_default())).collect(),
+                            asks.iter().map(|(p, q)| (p.parse().unwrap_or_default(), q.parse().unwrap_or_default())).collect(),
+                        );
+                        if let Some(depth) = state.depths.get(&symbol) {
+                            book.truncate(*depth.value() as usize);
+                        }
+                        state.orderbooks.insert(symbol.clone(), book);
+                    }
+                    
+                    // Store frame in per-symbol buffer
+                    let buffer = state.get_or_create_frame_buffer(&symbol);
+                    {
+                        let mut buf = buffer.write().await;
+                        buf.push_back(frame_data.clone());
+                        if buf.len() > 2000 {
+                            buf.pop_front();
+                        }
+                    }
+                    
+                    state.push_event(UiEvent::SubscribedBook).await;
+                }
+                blackbox_ws::parser::WsFrame::BookUpdate { symbol, bids, asks, checksum, timestamp } => {
+                    // Process book update (same as live mode)
+                    if let Some(mut book_entry) = state.orderbooks.get_mut(&symbol) {
+                        let book = book_entry.value_mut();
+                        
+                        let bid_updates: Vec<_> = bids.iter()
+                            .filter_map(|(p, q)| {
+                                let price = p.parse::<rust_decimal::Decimal>().ok()?;
+                                let qty = q.parse::<rust_decimal::Decimal>().ok()?;
+                                Some((price, qty))
+                            })
+                            .collect();
+                        
+                        let ask_updates: Vec<_> = asks.iter()
+                            .filter_map(|(p, q)| {
+                                let price = p.parse::<rust_decimal::Decimal>().ok()?;
+                                let qty = q.parse::<rust_decimal::Decimal>().ok()?;
+                                Some((price, qty))
+                            })
+                            .collect();
+                        
+                        book.apply_updates(bid_updates, ask_updates);
+                        
+                        if let Some(depth) = state.depths.get(&symbol) {
+                            book.truncate(*depth.value() as usize);
+                        }
+                        
+                        // Verify checksum
+                        if let Some(expected_checksum) = checksum {
+                            if let Some(instrument) = state.instruments.get(&symbol) {
+                                let start = std::time::Instant::now();
+                                let is_valid = blackbox_core::checksum::verify_checksum(
+                                    book,
+                                    expected_checksum,
+                                    instrument.price_precision,
+                                    instrument.qty_precision,
+                                );
+                                let latency = start.elapsed().as_millis();
+                                
+                                // Update health
+                                if let Some(mut health) = state.health.get_mut(&symbol) {
+                                    health.record_message();
+                                    health.last_msg_ts = Some(now);
+                                    
+                                    if is_valid {
+                                        health.record_checksum_ok();
+                                        health.consecutive_fails = 0;
+                                        state.push_event(UiEvent::ChecksumOk { symbol: symbol.clone() }).await;
+                                    } else {
+                                        health.record_checksum_fail();
+                                        health.consecutive_fails += 1;
+                                        health.last_checksum_mismatch = Some(now);
+                                        state.push_event(UiEvent::ChecksumMismatch { symbol: symbol.clone() }).await;
+                                        
+                                        // Create incident
+                                        let incident = incident_manager.record_incident(
+                                            blackbox_core::incident::IncidentReason::ChecksumMismatch,
+                                            Some(symbol.clone()),
+                                            serde_json::json!({}),
+                                        ).await;
+                                        
+                                        let incident_meta = IncidentMeta {
+                                            id: incident.id,
+                                            symbol: Some(symbol.clone()),
+                                            reason: "ChecksumMismatch".to_string(),
+                                            timestamp: incident.timestamp,
+                                            zip_path: None,
+                                            frames_path: None,
+                                            frame_count: None,
+                                        };
+                                        state.set_last_incident(incident_meta).await;
+                                        state.push_event(UiEvent::IncidentCaptured { 
+                                            id: incident.id, 
+                                            reason: "ChecksumMismatch".to_string() 
+                                        }).await;
+                                    }
+                                    health.update_msg_rate(10.0);
+                                }
+                                
+                                // Update integrity proof
+                                update_integrity_proof(&state, &symbol, expected_checksum, is_valid, latency).await;
+                            }
+                        }
+                        
+                        // Store frame
+                        let buffer = state.get_or_create_frame_buffer(&symbol);
+                        {
+                            let mut buf = buffer.write().await;
+                            buf.push_back(frame_data.clone());
+                            if buf.len() > 2000 {
+                                buf.pop_front();
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        
+        // Small delay for UI responsiveness
+        tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+    }
+    
+    Ok(())
+}
+
+async fn process_ws_events_with_logging(
                 frames.push((chrono::Utc::now(), raw_frame.clone()));
                 if frames.len() > 1000 {
                     frames.remove(0);

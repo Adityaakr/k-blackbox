@@ -1,152 +1,223 @@
-# Kraken Blackbox: Verified Orderbooks + Record/Replay Debugging
+# Kraken Blackbox: Verifiable Orderbooks + Deterministic Replay
 
-**A Rust SDK for Kraken WebSocket v2 that verifies L2 orderbook integrity via CRC32 checksums and enables deterministic bug reproduction through frame-level recording and replay.**
-
-**Track:** SDK Client
+**The correctness-first SDK that proves your orderbook integrity and makes bugs reproducible.**
 
 [![Rust](https://img.shields.io/badge/Rust-1.70+-orange.svg)](https://www.rust-lang.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Track: SDK Client](https://img.shields.io/badge/Track-SDK%20Client-blue.svg)]()
+
+**Why this wins vs throughput SDKs:** High-performance SDKs fail silently. Blackbox makes data integrity observable—you see checksums match in real-time, and when they don't, you get a reproducible incident bundle with full diagnostic context.
 
 ---
 
-## Quickstart
+## 🚀 30-Second Demo
 
 ```bash
+# Build
 cargo build --release
-./target/release/blackbox run --symbols BTC/USD --depth 10 --http 127.0.0.1:8080
-curl http://127.0.0.1:8080/health
-curl http://127.0.0.1:8080/book/BTC%2FUSD/top
+
+# Launch TUI with live data
+./target/release/blackbox tui --symbols BTC/USD,ETH/USD --depth 10
+
+# Or test HTTP API (in another terminal)
+curl http://127.0.0.1:8080/health | jq .
+```
+
+**What you should see:**
+- ✅ Integrity Inspector showing **Expected vs Got checksums** side-by-side
+- ✅ **MATCH** status when checksums verify correctly
+- ✅ Real-time orderbook with depth bars
+- ✅ Health metrics (checksum OK rate, message counts)
+
+---
+
+## 🎬 Judge Demo Script (2 Minutes)
+
+### Step 1: Show Live Integrity Verification
+```bash
+./target/release/blackbox tui --symbols BTC/USD,ETH/USD,SOL/USD --depth 10
+```
+**Point to:** Integrity Inspector showing Expected checksum (from Kraken) vs Got checksum (computed locally) matching ✅
+
+### Step 2: Record a Session
+Press **[R]** in TUI to start recording. Wait 10-20 seconds. Press **[R]** again to stop.
+
+**Or via CLI:**
+```bash
+./target/release/blackbox tui --symbols BTC/USD --depth 10 --record session.ndjson
+# Wait, then press Q
+```
+
+### Step 3: Trigger Controlled Mismatch (Fault Injection)
+```bash
+./target/release/blackbox tui \
+  --symbols BTC/USD --depth 10 \
+  --replay session.ndjson \
+  --fault mutate_qty \
+  --once-at 50 \
+  --speed 4.0
+```
+
+**Watch:** Status changes from ✅ MATCH to ❌ MISMATCH. Event log shows: `FAULT_INJECTED` → `CHECKSUM_MISMATCH` → `INCIDENT_CAPTURED`
+
+### Step 4: Export Incident Bundle
+Press **[E]** in TUI, or:
+```bash
+curl -X POST http://127.0.0.1:8080/export-bug -o incident.zip
+```
+
+**Verify:**
+```bash
+unzip -l incident.zip
+# Shows: metadata.json, config.json, health.json, frames.ndjson, orderbook.json, checksums.json
+```
+
+### Step 5: Replay to Reproduce
+```bash
+./target/release/blackbox replay-incident \
+  --bundle ./incidents/incident_*.zip \
+  --speed 4.0
+```
+
+**Result:** Same mismatch occurs at the same frame—deterministic reproduction.
+
+---
+
+## 🎯 Why It Matters
+
+Trading systems built on WebSocket orderbooks face a silent failure problem:
+
+- ❌ **High-throughput SDKs process millions of messages** but can't prove correctness
+- ❌ **Checksum mismatches occur** but you have no visibility into what went wrong
+- ❌ **Bugs are non-reproducible**—no way to replay the exact sequence of frames
+- ❌ **Debugging takes days** with incomplete logs and no diagnostic context
+- ❌ **Stakeholders can't verify** that your system is working correctly
+
+**Kraken's solution:** Each book update includes a CRC32 checksum computed from the top 10 bids/asks. We compute the same checksum locally and compare. If they match, the orderbook is correct. If not, we capture the incident.
+
+---
+
+## 🏗️ What We Built
+
+A Rust SDK (`blackbox-core` + `blackbox-ws`) plus CLI tool (`blackbox-server`) that:
+
+1. **Connects** to Kraken WebSocket v2
+2. **Parses** instrument snapshots (to get price/qty precisions)
+3. **Maintains** in-memory orderbooks (BTreeMap for ordered iteration)
+4. **Verifies** CRC32 checksums on every update (using instrument precisions)
+5. **Records** raw frames + timestamps to NDJSON
+6. **Replays** frames deterministically through the same pipeline
+7. **Exports** incident bundles (ZIP with config, health, frames, orderbook state)
+
+```
+┌─────────────┐     ┌──────────┐     ┌─────────────┐     ┌──────────┐
+│  Kraken WS  │ --> │  Parser  │ --> │  Orderbook  │ --> │ Checksum │
+│     v2      │     │ (Events) │     │  (BTreeMap) │     │ Verifier │
+└─────────────┘     └──────────┘     └─────────────┘     └──────────┘
+                                                              │
+                                                              v
+                    ┌──────────┐     ┌──────────┐     ┌─────────────┐
+                    │ Recorder │ <-- │  Frame   │ <-- │   Match?    │
+                    │ (NDJSON) │     │  Buffer  │     │   ❌ → ZIP  │
+                    └──────────┘     └──────────┘     └─────────────┘
 ```
 
 ---
 
-## Problem
+## 📊 Key Differentiators
 
-Building reliable trading systems on Kraken WebSocket v2 requires manual WebSocket handling, orderbook state management, and checksum verification. When orderbook bugs occur in production—checksum mismatches, missed updates, or precision errors—there's no way to reproduce them deterministically. Teams spend hours debugging with incomplete logs and no visibility into the exact sequence of WebSocket frames that caused the issue.
-
----
-
-## Solution
-
-Kraken Blackbox is a production-minded Rust SDK (`blackbox-core` + `blackbox-ws`) that abstracts Kraken WebSocket v2 complexity and provides verified L2 orderbooks with automatic checksum validation. The SDK maintains in-memory orderbooks, verifies CRC32 checksums per Kraken's v2 specification, and records raw WebSocket frames for deterministic replay. A companion CLI tool (`blackbox-server`) demonstrates SDK usage with a local HTTP API for health monitoring and bug bundle export.
-
-**What makes it unique**: Precision-preserving decimal handling (no floating-point errors), automatic checksum verification with auto-resync on mismatch, and deterministic record/replay that re-feeds frames through the same pipeline for exact bug reproduction.
-
----
-
-## Built for & Impact
-
-Kraken Blackbox is built for teams building trading systems, market data pipelines, and algorithmic trading strategies on Kraken WebSocket v2. It eliminates weeks of infrastructure work and enables rapid debugging of production issues.
-
-### Time and Cost Savings
-
-| Task | Without Blackbox | With Blackbox | Savings |
-|------|------------------|---------------|---------|
-| WebSocket client | 2-3 days | 5 minutes | 99% |
-| Checksum verification | 1-2 days | Done | 100% |
-| Health monitoring | 1-2 days | Done | 100% |
-| Recording/replay | 2-3 days | Done | 100% |
-| Bug debugging | Days/weeks | Minutes | 95%+ |
-| **Total** | **1-2 weeks** | **5 minutes** | **99.5%** |
-
-**Impact**: Instead of spending 1-2 weeks building infrastructure, teams can start with a production-minded SDK in minutes and focus on their trading logic. When bugs occur, deterministic replay turns days of debugging into minutes of investigation.
+| Feature | Throughput-Focused SDKs | **Kraken Blackbox** |
+|---------|------------------------|---------------------|
+| **Integrity Proof** | ❌ Not verified | ✅ **Visible in TUI (Expected vs Got)** |
+| **Bug Reproduction** | ❌ Non-deterministic | ✅ **Deterministic replay (same frames = same result)** |
+| **Incident Debugging** | ❌ Logs only | ✅ **One-click ZIP bundles with full context** |
+| **Precision Handling** | ⚠️ Floating-point errors | ✅ **`rust_decimal` (exact arithmetic)** |
+| **Visual Verification** | ❌ Trust blindly | ✅ **Integrity Inspector shows checksums live** |
+| **Replay Tooling** | ❌ Manual reconstruction | ✅ **Built-in replayer with fault injection** |
+| **Health Metrics** | ⚠️ Basic counters | ✅ **Checksum OK rate, mismatch tracking, incident count** |
 
 ---
 
-## Key Features
+## ✨ Features
 
-- **Checksum-verified orderbooks**: Validates CRC32 on every update per Kraken WS v2 spec, auto-resyncs on mismatch
-- **Deterministic record/replay**: Records raw WS frames + timestamps, replays through same pipeline at any speed
-- **Precision-preserving decimals**: Uses `rust_decimal::Decimal` throughout (no f64) to preserve exact precision
-- **Production-minded reliability**: Auto-reconnection with exponential backoff, optional keepalive hooks (ping/heartbeat)
-- **Health monitoring**: Per-symbol checksum stats, message rates, connection status, last seen times
-- **Bug bundle export**: One-click ZIP export (config, health, frames, orderbook state) for incident sharing
+### Integrity Features
+- **CRC32 checksum verification** on every book update (per Kraken WS v2 spec)
+- **Auto-resync** on mismatch (re-subscribes to snapshot)
+- **Integrity Inspector TUI** showing Expected vs Computed checksums in real-time
+- **Top 10 bids/asks preview** used for checksum calculation
+- **Verify latency tracking** (<1ms typical)
 
----
+### Replay & Incident Features
+- **Frame-level recording** (raw WebSocket frames + timestamps to NDJSON)
+- **Deterministic replay** at any speed (realtime, 4x, as-fast)
+- **Fault injection** (drop/reorder/mutate frames) for controlled demos
+- **Incident auto-capture** on checksum mismatch
+- **One-command bundle export** (ZIP with metadata, config, health, frames, orderbook)
 
-## Architecture & Data Flow
-
-```mermaid
-graph TB
-    subgraph Kraken["🌐 Kraken WebSocket v2"]
-        WS["wss://ws.kraken.com/v2<br/>(Public Market Data)"]
-    end
-    
-    subgraph SDK["📦 SDK Layer (blackbox-ws + blackbox-core)"]
-        CLIENT["WebSocket Client<br/>(tokio-tungstenite)"]
-        PARSER["Frame Parser<br/>(JSON → Normalized Events)"]
-        INST_MGR["Instrument Manager<br/>(price_precision, qty_precision)"]
-        OB_ENGINE["Orderbook Engine<br/>(BTreeMap, apply updates)"]
-        CHECKSUM["Checksum Verifier<br/>(CRC32 per Kraken spec)"]
-        RECORDER["Recorder<br/>(Raw frames + timestamps)"]
-    end
-    
-    subgraph APP["🔧 Example App (blackbox-server)"]
-        HTTP["HTTP API<br/>(Axum server)"]
-        HEALTH["Health Tracker<br/>(Metrics, stats)"]
-        REPLAYER["Replayer<br/>(Deterministic replay)"]
-    end
-    
-    WS -->|"1. Connect"| CLIENT
-    CLIENT -->|"2. Subscribe instrument"| WS
-    WS -->|"3. Instrument snapshot"| CLIENT
-    CLIENT -->|"4. Parse"| PARSER
-    PARSER -->|"5. Store precisions"| INST_MGR
-    CLIENT -->|"6. Subscribe book"| WS
-    WS -->|"7. Book snapshot/updates"| CLIENT
-    CLIENT -->|"8. Parse"| PARSER
-    PARSER -->|"9. Book events"| OB_ENGINE
-    INST_MGR -->|"10. Precisions"| CHECKSUM
-    OB_ENGINE -->|"11. Orderbook state"| CHECKSUM
-    CHECKSUM -->|"12. Verify CRC32"| OB_ENGINE
-    CHECKSUM -->|"13. Mismatch? Resync"| CLIENT
-    CLIENT -->|"14. Raw frames"| RECORDER
-    PARSER -->|"15. Decoded events"| RECORDER
-    OB_ENGINE -->|"16. Orderbook state"| HTTP
-    HEALTH -->|"17. Metrics"| HTTP
-    RECORDER -->|"18. NDJSON file"| REPLAYER
-    REPLAYER -->|"19. Replay frames"| PARSER
-    
-    style Kraken fill:#e1f5ff
-    style SDK fill:#e8f5e9
-    style APP fill:#fff4e1
-```
-
-### Flow Overview
-
-1. **Connection**: SDK connects to Kraken WebSocket v2 public endpoint
-2. **Instrument Channel**: Subscribes to get symbol precisions (`price_precision`, `qty_precision`)
-3. **Book Channel**: Subscribes to L2 orderbook with specified depth
-4. **Processing**: Frames parsed → orderbook updated → checksum verified
-5. **Recording**: Raw frames + decoded events written to NDJSON
-6. **Serving**: HTTP API exposes orderbooks, health, and bug bundles
-7. **Replay**: Recorded frames re-fed through same pipeline deterministically
+### Production Features
+- **Precision-preserving decimals** (`rust_decimal::Decimal`, no f64)
+- **Auto-reconnection** with exponential backoff
+- **Health monitoring** (per-symbol checksum stats, message rates, connection status)
+- **HTTP API** (health, orderbook queries, bundle export)
+- **Graceful shutdown** handling
 
 ---
 
-## Technical Highlights
+## 🏛️ Architecture
 
-Built in Rust with `tokio` for async I/O and `tokio-tungstenite` for WebSocket communication. Orderbooks use `BTreeMap<Decimal, Decimal>` for efficient ordered iteration and O(log n) truncation. Checksum verification implements Kraken's exact CRC32 algorithm: formats price/qty as fixed decimals using `price_precision`/`qty_precision` from instrument channel, concatenates asks then bids, computes CRC32. All arithmetic uses `rust_decimal::Decimal` to avoid floating-point precision errors. WebSocket client handles reconnection with exponential backoff + jitter. Recorder writes NDJSON with raw frames + timestamps; replayer re-feeds frames through the same parsing/orderbook/checksum pipeline for deterministic reproduction.
+Built in Rust with `tokio` for async I/O. Orderbooks use `BTreeMap<Decimal, Decimal>` for O(log n) insertion and ordered iteration. Checksum verification implements Kraken's exact algorithm:
+
+1. Format top 10 asks then bids as fixed decimals (using `price_precision`/`qty_precision` from instrument channel)
+2. Concatenate: `price:qty,price:qty,...`
+3. Compute CRC32 of the string
+4. Compare with Kraken's provided checksum
+
+All arithmetic uses `rust_decimal::Decimal` to avoid floating-point precision errors. Recorder writes NDJSON with raw frames + timestamps. Replayer re-feeds frames through the same parsing/orderbook/checksum pipeline for deterministic reproduction.
 
 ---
 
-## How It Works
+## 📦 Install + Usage
 
-### Install & Build
-
+### Build
 ```bash
 git clone https://github.com/Adityaakr/k-blackbox.git
 cd k-blackbox
 cargo build --release
 ```
 
-### SDK Usage (Example)
+### Run Live Mode
+```bash
+# HTTP API mode
+./target/release/blackbox run --symbols BTC/USD,ETH/USD --depth 10 --http 127.0.0.1:8080
 
+# TUI mode
+./target/release/blackbox tui --symbols BTC/USD,ETH/USD,SOL/USD --depth 10
+```
+
+### Record & Replay
+```bash
+# Record
+./target/release/blackbox tui --symbols BTC/USD --depth 10 --record session.ndjson
+
+# Replay with fault injection
+./target/release/blackbox tui \
+  --symbols BTC/USD --depth 10 \
+  --replay session.ndjson \
+  --fault mutate_qty \
+  --once-at 50 \
+  --speed 4.0
+```
+
+### Mock Mode (Offline Testing)
+```bash
+./target/release/blackbox tui --symbols BTC/USD,ETH/USD --depth 10 --mock
+```
+
+### SDK Usage Example
 ```rust
 use blackbox_ws::{WsClient, WsEvent};
 use blackbox_core::{Orderbook, verify_checksum};
 use tokio::sync::mpsc;
-use std::time::Duration;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -157,35 +228,13 @@ async fn main() -> anyhow::Result<()> {
         Duration::from_secs(30),
         tx,
     );
-
     tokio::spawn(async move { client.run().await.unwrap() });
 
-    let mut orderbooks = std::collections::HashMap::new();
-    let mut instruments = std::collections::HashMap::new();
+    let mut orderbooks = HashMap::new();
+    let mut instruments = HashMap::new();
 
     while let Some(event) = rx.recv().await {
         match event {
-            WsEvent::InstrumentSnapshot(inst_map) => {
-                instruments = inst_map;
-            }
-            WsEvent::BookSnapshot { symbol, bids, asks, checksum } => {
-                let mut ob = Orderbook::new();
-                ob.apply_snapshot(bids, asks);
-                orderbooks.insert(symbol.clone(), ob);
-                
-                if let Some(expected) = checksum {
-                    let inst = instruments.get(&symbol).unwrap();
-                    let is_valid = verify_checksum(
-                        &orderbooks[&symbol],
-                        expected,
-                        inst.price_precision,
-                        inst.qty_precision,
-                    );
-                    if !is_valid {
-                        eprintln!("Checksum mismatch for {}", symbol);
-                    }
-                }
-            }
             WsEvent::BookUpdate { symbol, bids, asks, checksum, .. } => {
                 let ob = orderbooks.get_mut(&symbol).unwrap();
                 ob.apply_updates(bids, asks);
@@ -193,8 +242,7 @@ async fn main() -> anyhow::Result<()> {
                 if let Some(expected) = checksum {
                     let inst = instruments.get(&symbol).unwrap();
                     let is_valid = verify_checksum(
-                        ob,
-                        expected,
+                        ob, expected,
                         inst.price_precision,
                         inst.qty_precision,
                     );
@@ -210,156 +258,66 @@ async fn main() -> anyhow::Result<()> {
 }
 ```
 
-### Workflow Steps
-
-1. **Connect**: SDK connects to `wss://ws.kraken.com/v2` (Kraken WebSocket v2 public endpoint)
-2. **Instrument**: Subscribes to `instrument` channel (snapshot=true) to fetch `price_precision`/`qty_precision` for symbols
-3. **Book**: Subscribes to `book` channel (L2) with specified depth, receives snapshot + updates
-4. **Verify**: On each book update, computes CRC32 checksum using instrument precisions, compares with Kraken's checksum
-5. **Resync**: On mismatch, auto-resubscribes to book snapshot for that symbol
-6. **Record**: Recorder writes raw WS frames + timestamps to NDJSON file
-7. **Serve**: HTTP API exposes health, orderbook queries, bug bundle export
-
 ---
 
-## Demo & Documentation
+## 📁 Outputs & Artifacts
 
-**GitHub Repository**: [https://github.com/Adityaakr/k-blackbox](https://github.com/Adityaakr/k-blackbox)
+### Incident Bundle (ZIP)
+When a checksum mismatch occurs (or on manual export), a bundle is created:
 
-**Video Walkthrough**: *(add video link here)*
-
-**Screenshot**: *(add gif here showing health endpoint + orderbook query)*
-
-### API Examples
-
-**Health endpoint:**
-```bash
-curl http://127.0.0.1:8080/health
 ```
+incidents/
+└── incident_1735065923_BTC_USD.zip
+    ├── metadata.json      # Incident ID, timestamp, reason, symbol
+    ├── config.json        # Symbols, depth, settings
+    ├── health.json        # Health snapshot at incident time
+    ├── frames.ndjson      # Last 500+ frames around incident
+    ├── orderbook.json     # Top N bids/asks snapshot
+    ├── instrument.json    # Precision info (if available)
+    └── checksums.json     # Expected/computed checksums, preview
+```
+
+**Example metadata.json:**
 ```json
 {
-  "status": "OK",
-  "symbols": [{
-    "symbol": "BTC/USD",
-    "connected": true,
-    "total_msgs": 125000,
-    "checksum_ok": 124995,
-    "checksum_fail": 5
-  }]
+  "incident": {
+    "id": "incident_1735065923_ChecksumMismatch",
+    "timestamp": "2025-12-24T13:45:23.123Z",
+    "reason": "ChecksumMismatch",
+    "symbol": "BTC/USD"
+  },
+  "config": {
+    "symbols": ["BTC/USD"],
+    "depth": 10
+  }
 }
 ```
 
-**Top of book:**
-```bash
-curl http://127.0.0.1:8080/book/BTC%2FUSD/top
-```
-```json
-{
-  "symbol": "BTC/USD",
-  "best_bid": ["89913.3", "0.00366279"],
-  "best_ask": ["89913.4", "3.56256894"],
-  "spread": "0.1"
-}
-```
+---
 
-**Bug bundle export:**
-```bash
-curl -X POST http://127.0.0.1:8080/export-bug \
-  -H "Content-Type: application/json" \
-  -o bug-bundle.zip
-```
-Returns ZIP file with config, health, frames, and instruments.
+## 📚 Documentation
 
-**Documentation**: See `/docs` directory:
-- `API.md` - HTTP API reference
-- `TESTING.md` - Testing guide
-- `QUICK_TEST.md` - Quick test commands
+- [`docs/API.md`](docs/API.md) - HTTP API reference
+- [`docs/demo.md`](docs/demo.md) - Complete demo walkthrough
+- [`docs/TESTING.md`](docs/TESTING.md) - Testing guide
+- [`FAULT_INJECTION_TEST.md`](FAULT_INJECTION_TEST.md) - Fault injection testing
+
+**Planned:**
+- Video walkthrough
+- Screenshots/GIFs of Integrity Inspector TUI
 
 ---
 
-## Future Enhancements
+## 🤝 Contribution
 
-- Multi-connection sharding router for high-throughput symbol subscriptions
-- Strategy hooks: callback API for custom orderbook event handlers
-- Richer UI dashboard: real-time visualization of orderbook depth and health metrics
-- Integration with Grafana: Prometheus metrics export for monitoring dashboards
+Contributions welcome. Please open an issue first for significant changes.
 
 ---
 
-## CLI Usage
-
-**Run live connection:**
-```bash
-./target/release/blackbox run \
-  --symbols BTC/USD,ETH/USD \
-  --depth 25 \
-  --http 127.0.0.1:8080 \
-  --record ./session.ndjson
-```
-
-**Replay recording:**
-```bash
-./target/release/blackbox replay \
-  --input ./session.ndjson \
-  --speed 4.0 \
-  --http 127.0.0.1:8080
-```
-
----
-
-## HTTP API
-
-- `GET /health` - Overall health + per-symbol checksum stats, message rates, connection status
-- `GET /book/:symbol/top` - Top of book (best bid/ask, spread, mid price)
-- `GET /book/:symbol?limit=N` - Full orderbook (or limited depth)
-- `GET /metrics` - Prometheus-formatted metrics
-- `POST /export-bug` - Export bug bundle ZIP (returns ZIP file with config, health, frames, instruments)
-
-See `/docs/API.md` for detailed request/response examples.
-
----
-
-## Testing
-
-```bash
-# Unit tests
-cargo test
-
-# Integration test
-./test.sh
-
-# Test checksum verification
-cargo test --package blackbox-core checksum
-```
-
----
-
-## Repo Layout
-
-```
-kraken-blackbox/
-├── crates/
-│   ├── blackbox-core/     # SDK: orderbook, checksum, precision, types
-│   ├── blackbox-ws/        # SDK: WebSocket client, parser
-│   └── blackbox-server/    # Example app: CLI + HTTP API
-├── docs/
-│   ├── API.md
-│   ├── TESTING.md
-│   └── QUICK_TEST.md
-├── Cargo.toml
-└── README.md
-```
-
----
-
-## References
-
-- [Kraken WebSocket v2 Book Documentation](https://docs.kraken.com/api/docs/websocket-v2/book)
-- [Kraken Checksum Guide (v2)](https://docs.kraken.com/api/docs/guides/spot-ws-book-v2/)
-- [Kraken WebSocket FAQ](https://support.kraken.com/articles/360022326871-kraken-websocket-api-frequently-asked-questions)
-
----
-
-## License
+## 📄 License
 
 MIT License - see [LICENSE](LICENSE) file for details.
+
+---
+
+**Built for Kraken Forge SDK Client Track** | [GitHub](https://github.com/Adityaakr/k-blackbox)
