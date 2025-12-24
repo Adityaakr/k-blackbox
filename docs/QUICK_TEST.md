@@ -4,7 +4,7 @@ Fastest way to verify Kraken Blackbox is working correctly.
 
 ---
 
-## 🚀 Automated Test (Recommended)
+## 🚀 Quick Start (Recommended)
 
 Run the test script:
 
@@ -13,22 +13,26 @@ Run the test script:
 ```
 
 **What it does:**
-1. Starts the server
-2. Waits for WebSocket connection
-3. Tests all endpoints
-4. Reports results
+1. Builds the project
+2. Tests TUI in mock mode
+3. Tests HTTP API endpoints
+4. Tests recording and replay
+5. Reports results
 
 **Expected output:**
 ```
-🚀 Starting Kraken Blackbox Test...
-✅ Health check passed
-✅ Top of book data received
-✅ Orderbook has 3 bid levels
-✅ No errors found in logs
-✅ All tests completed!
+╔════════════════════════════════════════════════════════════╗
+║     Kraken Blackbox - Comprehensive Test Suite            ║
+╚════════════════════════════════════════════════════════════╝
+
+✓ Build successful
+✓ Mock mode test completed
+✓ Health endpoint working
+✓ Book endpoint working
+...
 ```
 
-**Time:** ~20 seconds
+**Time:** ~2-3 minutes (includes build time)
 
 ---
 
@@ -51,6 +55,11 @@ Run the test script:
 curl http://127.0.0.1:8080/health | python3 -m json.tool
 ```
 
+**Or with jq (if installed):**
+```bash
+curl -s http://127.0.0.1:8080/health | jq .
+```
+
 **✅ Success if you see:**
 - `"status": "OK"`
 - `"connected": true`
@@ -61,6 +70,11 @@ curl http://127.0.0.1:8080/health | python3 -m json.tool
 
 ```bash
 curl http://127.0.0.1:8080/book/BTC%2FUSD/top | python3 -m json.tool
+```
+
+**Or with jq:**
+```bash
+curl -s http://127.0.0.1:8080/book/BTC%2FUSD/top | jq .
 ```
 
 **✅ Success if you see:**
@@ -74,17 +88,21 @@ curl http://127.0.0.1:8080/book/BTC%2FUSD/top | python3 -m json.tool
 
 ## 🎯 One-Liner Test
 
-Copy and paste this entire block:
+Copy and paste this entire block (works from any directory):
 
 ```bash
-cd /Users/adityakumar/Desktop/kblackbox && \
+cd "$(git rev-parse --show-toplevel 2>/dev/null || pwd)" && \
 ./target/release/blackbox run --symbols BTC/USD --depth 10 --http 127.0.0.1:8080 > /tmp/bb.log 2>&1 & \
+SERVER_PID=$! && \
 sleep 20 && \
 echo "=== Health ===" && \
-curl -s http://127.0.0.1:8080/health | python3 -m json.tool && \
+curl -s http://127.0.0.1:8080/health | python3 -m json.tool 2>/dev/null || curl -s http://127.0.0.1:8080/health && \
 echo "" && \
 echo "=== Top of Book ===" && \
-curl -s http://127.0.0.1:8080/book/BTC%2FUSD/top | python3 -m json.tool
+curl -s http://127.0.0.1:8080/book/BTC%2FUSD/top | python3 -m json.tool 2>/dev/null || curl -s http://127.0.0.1:8080/book/BTC%2FUSD/top && \
+echo "" && \
+echo "Stopping server..." && \
+kill $SERVER_PID 2>/dev/null
 ```
 
 This:
@@ -93,6 +111,7 @@ This:
 - Tests health endpoint
 - Tests top of book endpoint
 - Shows results
+- Stops the server
 
 **Time:** ~25 seconds
 
@@ -138,6 +157,7 @@ This:
 ## 🐛 Quick Troubleshooting
 
 ### "Connection refused"
+
 ```bash
 # Check if server is running
 ps aux | grep blackbox
@@ -150,6 +170,7 @@ lsof -i :8080
 ```
 
 ### "Empty book data"
+
 ```bash
 # Wait longer (up to 30 seconds)
 # Check server terminal for errors
@@ -157,6 +178,7 @@ lsof -i :8080
 ```
 
 ### "No data after 30 seconds"
+
 ```bash
 # Check internet connection
 # Check server logs: tail -f /tmp/bb.log
@@ -205,9 +227,24 @@ head -3 test.ndjson
 
 ## 🔍 Verify Checksum Verification
 
+**Simple check:**
 ```bash
-# Monitor checksum stats
-watch -n 2 'curl -s http://127.0.0.1:8080/health | python3 -c "import sys, json; d=json.load(sys.stdin); s=d[\"symbols\"][0]; print(f\"OK: {s[\"checksum_ok\"]}, Fail: {s[\"checksum_fail\"]}, Rate: {s[\"checksum_ok\"]/(s[\"checksum_ok\"]+s[\"checksum_fail\"]+1)*100:.2f}%\")"'
+curl -s http://127.0.0.1:8080/health | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+if 'symbols' in d and len(d['symbols']) > 0:
+    s = d['symbols'][0]
+    ok = s.get('checksum_ok', 0)
+    fail = s.get('checksum_fail', 0)
+    total = ok + fail
+    rate = (ok / total * 100) if total > 0 else 0
+    print(f'OK: {ok}, Fail: {fail}, Rate: {rate:.2f}%')
+"
+```
+
+**Or with jq:**
+```bash
+curl -s http://127.0.0.1:8080/health | jq '.symbols[0] | {ok: .checksum_ok, fail: .checksum_fail, rate: ((.checksum_ok / (.checksum_ok + .checksum_fail + 1)) * 100)}'
 ```
 
 **✅ Success:** Checksum success rate > 99%
@@ -226,15 +263,27 @@ unzip -q bug.zip -d bug/
 ls -la bug/
 ```
 
-**✅ Success:** ZIP contains `config.json`, `health.json`, `frames.ndjson`, `instruments.json`
+**✅ Success:** ZIP contains `config.json`, `health.json`, `frames.ndjson`, `orderbook.json`, `checksums.json`
 
 ---
 
 ## ⚡ Performance Check
 
+**Simple message rate check:**
 ```bash
-# Monitor message rate
-watch -n 1 'curl -s http://127.0.0.1:8080/health | python3 -c "import sys, json; d=json.load(sys.stdin); s=d[\"symbols\"][0]; print(f\"Rate: {s[\"msg_rate_estimate\"]:.1f} msg/s\")"'
+curl -s http://127.0.0.1:8080/health | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+if 'symbols' in d and len(d['symbols']) > 0:
+    s = d['symbols'][0]
+    rate = s.get('msg_rate_estimate', 0)
+    print(f'Rate: {rate:.1f} msg/s')
+"
+```
+
+**Or with jq:**
+```bash
+curl -s http://127.0.0.1:8080/health | jq '.symbols[0].msg_rate_estimate'
 ```
 
 **✅ Success:** Message rate > 10 msg/s for active symbols
@@ -252,4 +301,3 @@ If all checks pass:
 **You're ready to use Kraken Blackbox!** 🎉
 
 For detailed testing, see [TESTING.md](./TESTING.md).
-
