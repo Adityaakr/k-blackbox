@@ -410,10 +410,6 @@ incidents/
 - [`docs/TESTING.md`](docs/TESTING.md) - Testing guide
 - [`FAULT_INJECTION_TEST.md`](FAULT_INJECTION_TEST.md) - Fault injection testing
 
-**Planned:**
-- Video walkthrough
-- Screenshots/GIFs of Integrity Inspector TUI
-
 ---
 
 ## 🤝 Contribution
