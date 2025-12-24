@@ -1,4 +1,5 @@
-# Kraken Blackbox: Verified Orderbooks. Reproducible Incidents.
+# Kraken Blackbox: 
+## Verified Orderbooks. Reproducible Incidents
 
 **Live CRC32-verified L2 books + frame-level NDJSON record/replay + incident ZIP export — with real-time verify latency telemetry (last/avg/p95) in the TUI.**
 
@@ -169,9 +170,9 @@ async fn main() -> anyhow::Result<()> {
 Comprehensive documentation in `/docs`:
 
 **Getting Started:**
-- **[Quick Test Guide](./docs/QUICK_TEST.md)** - 30-second quick start with test script (`./test.sh`)
-- **[Demo Script](./docs/demo.md)** - Complete judge demo walkthrough (2 minutes)
-- **[Demo Proof Runbook](./docs/DEMO_PROOF_RUNBOOK.md)** - Exact commands that work end-to-end
+- **[Demo](./docs/QUICK_TEST.md)** - 30-second quick start with test script (`./test.sh`)
+- **[API](./docs/api.md)** - Complete judge demo walkthrough (2 minutes)
+- **[Testing](./docs/testing.md)** - Exact commands that work end-to-end
 
 **Test Scripts:**
 - `./test.sh` - Quick test with multiple pairs (BTC/USD, ETH/USD, SOL/USD, AVAX/USD)
